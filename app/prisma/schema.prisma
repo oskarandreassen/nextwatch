@@ -1,0 +1,66 @@
+generator client { provider = "prisma-client-js" }
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Plan { free lifetime }
+
+model User {
+  id         String   @id
+  email      String?  @unique
+  plan       Plan     @default(free)
+  planSince  DateTime?
+  createdAt  DateTime @default(now())
+  profile    Profile?
+  ratings    Rating[]
+  watchlist  Watchlist[]
+  purchases  Purchase[]
+}
+
+model Profile {
+  userId            String   @id
+  dob               DateTime
+  uiLanguage        String   @default("sv")
+  yearPreference    String   @default("all")
+  recycleAfterDays  Int      @default(14)
+  region            String   @default("SE")
+  locale            String   @default("sv-SE")
+  providers         Json     @default("[]")
+  updatedAt         DateTime @default(now())
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Rating {
+  id         String   @id
+  userId     String
+  tmdbId     Int
+  mediaType  String
+  decision   String
+  decidedAt  DateTime @default(now())
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId, tmdbId, mediaType])
+}
+
+model Watchlist {
+  id         String   @id
+  userId     String
+  tmdbId     Int
+  mediaType  String
+  addedAt    DateTime @default(now())
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@unique([userId, tmdbId, mediaType])
+}
+
+model Purchase {
+  id                     String   @id
+  userId                 String
+  stripePaymentIntentId  String?
+  amountTotal            Int      @default(0)
+  currency               String   @default("SEK")
+  product                String   @default("lifetime")
+  createdAt              DateTime @default(now())
+  user                   User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@index([userId, createdAt])
+}
