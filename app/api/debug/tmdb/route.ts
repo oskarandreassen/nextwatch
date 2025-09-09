@@ -1,8 +1,12 @@
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 const TMDB_BASE = "https://api.themoviedb.org/3";
+
+type TMDbItem = { id: number; title?: string; name?: string; popularity?: number };
+type DiscoverResponse = { results?: TMDbItem[] };
 
 export async function GET(req: Request) {
   const token = process.env.TMDB_V4_TOKEN;
@@ -11,7 +15,7 @@ export async function GET(req: Request) {
   }
 
   const url = new URL(req.url);
-  const media = (url.searchParams.get("media") || "movie").toLowerCase(); // "movie" | "tv"
+  const media = (url.searchParams.get("media") || "movie").toLowerCase() as "movie" | "tv";
   const page = url.searchParams.get("page") || "1";
   const language = process.env.DEFAULT_LANGUAGE || "sv-SE";
   const region = process.env.DEFAULT_REGION || "SE";
@@ -19,10 +23,7 @@ export async function GET(req: Request) {
 
   const res = await fetch(
     `${TMDB_BASE}/${endpoint}?include_adult=false&language=${language}&region=${region}&sort_by=popularity.desc&page=${page}`,
-    {
-      headers: { Authorization: `Bearer ${token}` },
-      next: { revalidate: 60 }
-    }
+    { headers: { Authorization: `Bearer ${token}` }, next: { revalidate: 60 } }
   );
 
   if (!res.ok) {
@@ -30,13 +31,14 @@ export async function GET(req: Request) {
     return NextResponse.json({ ok: false, status: res.status, body: text.slice(0, 500) }, { status: res.status });
   }
 
-  const data = await res.json();
-  const sample = (data.results ?? []).slice(0, 5).map((x: any) => ({
+  const data = (await res.json()) as DiscoverResponse;
+  const results = data.results ?? [];
+  const sample = results.slice(0, 5).map((x) => ({
     tmdbId: x.id,
-    mediaType: media === "tv" ? "tv" : "movie",
-    title: x.title || x.name,
-    popularity: x.popularity ?? null
+    mediaType: media,
+    title: x.title ?? x.name ?? "",
+    popularity: x.popularity ?? null,
   }));
 
-  return NextResponse.json({ ok: true, count: data.results?.length ?? 0, sample });
+  return NextResponse.json({ ok: true, count: results.length, sample });
 }
