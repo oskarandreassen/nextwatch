@@ -9,7 +9,12 @@ export function middleware(req: NextRequest) {
   const uid = req.cookies.get("nw_uid")?.value;
   if (!uid) {
     const res = NextResponse.next();
-    res.cookies.set("nw_uid", newId(), { httpOnly: true, sameSite: "Lax", path: "/", maxAge: 60*60*24*365 });
+    res.cookies.set("nw_uid", newId(), {
+      httpOnly: true,
+      sameSite: "lax",   // <— gemener!
+      path: "/",
+      maxAge: 60 * 60 * 24 * 365
+    });
     return res;
   }
   return NextResponse.next();

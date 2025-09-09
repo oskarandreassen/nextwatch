@@ -19,7 +19,12 @@ export async function GET() {
     await prisma.user.upsert({ where: { id: uid }, update: {}, create: { id: uid } });
 
     const res = NextResponse.json({ ok: true, userId: uid, hasProfile: false });
-    res.cookies.set("nw_uid", uid, { httpOnly: true, sameSite: "Lax", path: "/", maxAge: 60 * 60 * 24 * 365 });
+    res.cookies.set("nw_uid", uid, {
+      httpOnly: true,
+      sameSite: "lax",   // <— gemener!
+      path: "/",
+      maxAge: 60 * 60 * 24 * 365
+    });
     return res;
   }
 
