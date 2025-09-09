@@ -1,66 +1,86 @@
-generator client { provider = "prisma-client-js" }
+generator client {
+  provider = "prisma-client-js"
+}
 
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
-enum Plan { free lifetime }
+enum Plan {
+  free
+  lifetime
+}
 
 model User {
   id         String   @id
   email      String?  @unique
   plan       Plan     @default(free)
-  planSince  DateTime?
-  createdAt  DateTime @default(now())
+  planSince  DateTime? @map("plan_since")
+  createdAt  DateTime @default(now()) @map("created_at")
+
   profile    Profile?
   ratings    Rating[]
   watchlist  Watchlist[]
   purchases  Purchase[]
+
+  @@map("users")
 }
 
 model Profile {
-  userId            String   @id
-  dob               DateTime
-  uiLanguage        String   @default("sv")
-  yearPreference    String   @default("all")
-  recycleAfterDays  Int      @default(14)
+  userId            String   @id @map("user_id")
+  dob               DateTime @db.Date
+  uiLanguage        String   @default("sv")      @map("ui_language")
+  yearPreference    String   @default("all")     @map("year_preference")
+  recycleAfterDays  Int      @default(14)        @map("recycle_after_days")
   region            String   @default("SE")
   locale            String   @default("sv-SE")
   providers         Json     @default("[]")
-  updatedAt         DateTime @default(now())
+  updatedAt         DateTime @default(now())     @map("updated_at")
+
   user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("profiles")
 }
 
 model Rating {
   id         String   @id
-  userId     String
-  tmdbId     Int
-  mediaType  String
+  userId     String   @map("user_id")
+  tmdbId     Int      @map("tmdb_id")
+  mediaType  String   @map("media_type")
   decision   String
-  decidedAt  DateTime @default(now())
+  decidedAt  DateTime @default(now()) @map("decided_at")
+
   user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  @@index([userId, tmdbId, mediaType])
+
+  @@index([userId, tmdbId, mediaType], map: "idx_ratings_user_tmdb")
+  @@map("ratings")
 }
 
 model Watchlist {
   id         String   @id
-  userId     String
-  tmdbId     Int
-  mediaType  String
-  addedAt    DateTime @default(now())
+  userId     String   @map("user_id")
+  tmdbId     Int      @map("tmdb_id")
+  mediaType  String   @map("media_type")
+  addedAt    DateTime @default(now()) @map("added_at")
+
   user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
   @@unique([userId, tmdbId, mediaType])
+  @@map("watchlist")
 }
 
 model Purchase {
   id                     String   @id
-  userId                 String
-  stripePaymentIntentId  String?
-  amountTotal            Int      @default(0)
+  userId                 String   @map("user_id")
+  stripePaymentIntentId  String?  @map("stripe_payment_intent_id")
+  amountTotal            Int      @default(0)     @map("amount_total")
   currency               String   @default("SEK")
   product                String   @default("lifetime")
-  createdAt              DateTime @default(now())
+  createdAt              DateTime @default(now()) @map("created_at")
+
   user                   User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  @@index([userId, createdAt])
+
+  @@index([userId, createdAt], map: "idx_purchases_user")
+  @@map("purchases")
 }
