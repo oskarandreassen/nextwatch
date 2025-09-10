@@ -254,10 +254,10 @@ function SwipeInner() {
             onPointerCancel={onPointerEnd}
           >
             <div className="relative w-full" style={{ aspectRatio: "2 / 3" }}>
-              {/* next-card preview (mini-stack) */}
+              {/* next-card preview (hidden while flipping) */}
               <div
                 className="absolute inset-0 z-0 overflow-hidden rounded-xl border shadow"
-                style={{ transform: "translateY(12px) scale(0.96)", opacity: 0.9 }}
+                style={{ transform: "translateY(12px) scale(0.96)", opacity: 0.9, visibility: flip ? "hidden" : "visible" }}
                 aria-hidden
               >
                 {detNext?.posterPath ? (
@@ -275,10 +275,10 @@ function SwipeInner() {
                 )}
               </div>
 
-              {/* active card */}
+              {/* active card (opaque background to prevent show-through) */}
               <div
                 ref={cardWrapRef}
-                className="absolute inset-0 z-10 overflow-hidden rounded-xl border shadow"
+                className="absolute inset-0 z-10 overflow-hidden rounded-xl border shadow bg-black"
               >
                 <div className={`absolute inset-0 transition-transform duration-300 [transform-style:preserve-3d] ${flip ? "[transform:rotateY(180deg)]" : ""}`}>
                   {/* FRONT */}
@@ -297,7 +297,7 @@ function SwipeInner() {
                     ) : (
                       <div className="absolute inset-0 rounded-xl bg-[linear-gradient(90deg,rgba(255,255,255,0.06)_25%,rgba(255,255,255,0.12)_37%,rgba(255,255,255,0.06)_63%)] bg-[length:400%_100%] animate-[shimmer_1.2s_infinite]" />
                     )}
-                    {/* Overlay */}
+                    {/* bottom info */}
                     <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-black/70 via-black/20 to-transparent p-3 text-white">
                       <div className="flex items-end justify-between gap-3">
                         <div className="min-w-0">
@@ -310,7 +310,7 @@ function SwipeInner() {
                   </div>
 
                   {/* BACK */}
-                  <div className="absolute inset-0 bg-black/55 p-4 text-white [backface-visibility:hidden] [transform:rotateY(180deg)]">
+                  <div className="absolute inset-0 bg-black p-4 text-white [backface-visibility:hidden] [transform:rotateY(180deg)]">
                     <div className="mb-1 text-lg font-semibold">
                       {det?.title || cur.title} {det?.year ? <span className="text-xs opacity-70">[{det.year}]</span> : null}
                     </div>

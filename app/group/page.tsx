@@ -256,10 +256,10 @@ function GroupSwipeInner() {
             onPointerCancel={onPointerEnd}
           >
             <div className="relative w-full" style={{ aspectRatio: "2 / 3" }}>
-              {/* next preview */}
+              {/* next preview (hidden while flipping) */}
               <div
                 className="absolute inset-0 z-0 overflow-hidden rounded-xl border shadow"
-                style={{ transform: "translateY(12px) scale(0.96)", opacity: 0.9 }}
+                style={{ transform: "translateY(12px) scale(0.96)", opacity: 0.9, visibility: flip ? "hidden" : "visible" }}
                 aria-hidden
               >
                 {dNext?.posterPath ? (
@@ -277,8 +277,8 @@ function GroupSwipeInner() {
                 )}
               </div>
 
-              {/* active card */}
-              <div ref={cardRef} className="absolute inset-0 z-10 overflow-hidden rounded-xl border shadow">
+              {/* active card (opaque) */}
+              <div ref={cardRef} className="absolute inset-0 z-10 overflow-hidden rounded-xl border shadow bg-black">
                 <div className={`absolute inset-0 transition-transform duration-300 [transform-style:preserve-3d] ${flip ? "[transform:rotateY(180deg)]" : ""}`}>
                   {/* FRONT */}
                   <div className="absolute inset-0 [backface-visibility:hidden]">
@@ -308,7 +308,7 @@ function GroupSwipeInner() {
                   </div>
 
                   {/* BACK */}
-                  <div className="absolute inset-0 bg-black/55 p-4 text-white [backface-visibility:hidden] [transform:rotateY(180deg)]">
+                  <div className="absolute inset-0 bg-black p-4 text-white [backface-visibility:hidden] [transform:rotateY(180deg)]">
                     <div className="mb-1 text-lg font-semibold">
                       {details?.title || current.title} {details?.year ? <span className="text-xs opacity-70">[{details.year}]</span> : null}
                     </div>
