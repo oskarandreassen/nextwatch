@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { prisma } from "../../../../lib/prisma";
+import { prisma } from "../../../../../lib/prisma";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 const FREE_MAX = 3;
 const PREMIUM_MAX = 8;
 
-// Slumpa 6-teckenskod (A-Z, 0-9)
+// Slumpa 6-teckenskod (A-Z, 0-9) utan lättförväxlade tecken
 function makeCode(): string {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let out = "";
@@ -37,21 +37,25 @@ export async function POST(req: Request) {
   let code: string;
   if (!codeInput) {
     code = await uniqueCode();
-    await prisma.group.create({ data: { code } });
+    // ✅ Sätt required relationen "creator"
+    await prisma.group.create({
+      data: {
+        code,
+        creator: { connect: { id: uid } },
+      },
+    });
   } else {
     code = codeInput;
     const g = await prisma.group.findUnique({ where: { code } });
     if (!g) return NextResponse.json({ ok: false, error: "group not found" }, { status: 404 });
   }
 
-  // Kolla om redan medlem
+  // Redan medlem?
   const existing = await prisma.groupMember.findUnique({
     where: { groupCode_userId: { groupCode: code, userId: uid } },
   });
   if (existing) {
-    // returnera info ändå
     const count = await prisma.groupMember.count({ where: { groupCode: code } });
-    // premium om NÅGON i gruppen har lifetime
     const members = await prisma.groupMember.findMany({
       where: { groupCode: code },
       select: { userId: true },
@@ -66,7 +70,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true, code, size: count, cap, premium });
   }
 
-  // Cap baserat på gruppens nuvarande medlemmar (om någon är premium → högre cap)
+  // Cap baserat på om NÅGON i gruppen har premium
   const members = await prisma.groupMember.findMany({
     where: { groupCode: code },
     select: { userId: true },
@@ -90,5 +94,6 @@ export async function POST(req: Request) {
   await prisma.groupMember.create({
     data: { groupCode: code, userId: uid },
   });
+
   return NextResponse.json({ ok: true, code, size: size + 1, cap, premium });
 }
