@@ -50,9 +50,9 @@ function fmtRating(v: number | null): string {
   return (Math.round(v * 10) / 10).toFixed(1);
 }
 function vibrate(ms: number) {
-  if (typeof navigator !== "undefined" && "vibrate" in navigator) {
-    // @ts-expect-error: vibrate exists in browsers
-    navigator.vibrate(ms);
+  if (typeof navigator !== "undefined") {
+    const nav = navigator as Navigator & { vibrate?: (pattern: number | number[]) => boolean };
+    nav.vibrate?.(ms);
   }
 }
 
@@ -76,7 +76,6 @@ function SwipeInner() {
   useEffect(() => { indexRef.current = i; }, [i]);
   useEffect(() => { detailsRef.current = detailsMap; }, [detailsMap]);
 
-  // Ladda feed
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -97,7 +96,6 @@ function SwipeInner() {
     return () => { cancelled = true; };
   }, [media]);
 
-  // Hämta details
   const fetchDetails = useCallback(async (type: "movie" | "tv", id: number, cache: RequestCache) => {
     const key = `${type}:${id}`;
     if (detailsRef.current[key]) return;
@@ -109,7 +107,6 @@ function SwipeInner() {
     } catch { /* ignore */ }
   }, []);
 
-  // Prefetch current + next
   useEffect(() => {
     const cur = feed[i];
     if (isRec(cur)) fetchDetails(cur.mediaType, cur.tmdbId, i === 0 ? "no-store" : "force-cache");
@@ -117,7 +114,6 @@ function SwipeInner() {
     if (isRec(nxt)) fetchDetails(nxt.mediaType, nxt.tmdbId, "force-cache");
   }, [feed, i, fetchDetails]);
 
-  // Drag/tap
   const cardWrapRef = useRef<HTMLDivElement | null>(null);
   const startX = useRef<number | null>(null);
   const startT = useRef<number>(0);
@@ -141,7 +137,6 @@ function SwipeInner() {
       setI(v => v + 1);
       setFlip(false);
       setAnimLock(false);
-      // nollställ inför nästa kort
       el.style.transition = "transform 0s, opacity 0s";
       el.style.transform = "";
       el.style.opacity = "1";
@@ -156,12 +151,10 @@ function SwipeInner() {
       setFlip(false);
       return;
     }
-    // haptics + animation först (snabb UI-respons)
     if (kind === "like") { vibrate(12); flyOut("right"); }
     else if (kind === "dislike") { vibrate(10); flyOut("left"); }
     else { resetCardTransform(); }
 
-    // logga beslut i bakgrunden
     try {
       await fetch("/api/rate", {
         method: "POST",
@@ -185,7 +178,6 @@ function SwipeInner() {
     } catch { /* ignore */ }
   }, []);
 
-  // Tangentbord
   const handleKey = useCallback((e: KeyboardEvent) => {
     const idx = indexRef.current;
     const item = feedRef.current[idx];
@@ -206,7 +198,6 @@ function SwipeInner() {
     return () => window.removeEventListener("keydown", handleKey);
   }, [handleKey]);
 
-  // Pointer
   const onPointerDown = useCallback((e: React.PointerEvent) => {
     if (animLock) return;
     startX.current = e.clientX; startT.current = e.timeStamp;
@@ -237,7 +228,6 @@ function SwipeInner() {
   const dKey = isRec(cur) ? `${cur.mediaType}:${cur.tmdbId}` : "";
   const det = isRec(cur) ? detailsMap[dKey] : undefined;
 
-  // nästa kort för mini-stack
   const nxt = feed[i + 1];
   const nxtKey = isRec(nxt) ? `${nxt.mediaType}:${nxt.tmdbId}` : "";
   const detNext = isRec(nxt) ? detailsMap[nxtKey] : undefined;
