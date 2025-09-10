@@ -5,7 +5,6 @@ import { useSearchParams } from "next/navigation";
 import Image from "next/image";
 import AppShell from "../components/layouts/AppShell";
 import ActionDock from "../components/ui/ActionDock";
-import InfoPanel from "../components/panels/InfoPanel";
 
 export default function SwipePage() {
   return (
@@ -50,6 +49,12 @@ function fmtRating(v: number | null): string {
   if (v == null) return "–";
   return (Math.round(v * 10) / 10).toFixed(1);
 }
+function vibrate(ms: number) {
+  if (typeof navigator !== "undefined" && "vibrate" in navigator) {
+    // @ts-expect-error: vibrate exists in browsers
+    navigator.vibrate(ms);
+  }
+}
 
 function SwipeInner() {
   const sp = useSearchParams();
@@ -59,6 +64,7 @@ function SwipeInner() {
   const [i, setI] = useState(0);
   const [flip, setFlip] = useState(false);
   const [err, setErr] = useState("");
+  const [animLock, setAnimLock] = useState<false | "left" | "right">(false);
 
   const [detailsMap, setDetailsMap] = useState<Record<string, Details>>({});
 
@@ -70,6 +76,7 @@ function SwipeInner() {
   useEffect(() => { indexRef.current = i; }, [i]);
   useEffect(() => { detailsRef.current = detailsMap; }, [detailsMap]);
 
+  // Ladda feed
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -90,6 +97,7 @@ function SwipeInner() {
     return () => { cancelled = true; };
   }, [media]);
 
+  // Hämta details
   const fetchDetails = useCallback(async (type: "movie" | "tv", id: number, cache: RequestCache) => {
     const key = `${type}:${id}`;
     if (detailsRef.current[key]) return;
@@ -101,6 +109,7 @@ function SwipeInner() {
     } catch { /* ignore */ }
   }, []);
 
+  // Prefetch current + next
   useEffect(() => {
     const cur = feed[i];
     if (isRec(cur)) fetchDetails(cur.mediaType, cur.tmdbId, i === 0 ? "no-store" : "force-cache");
@@ -108,19 +117,38 @@ function SwipeInner() {
     if (isRec(nxt)) fetchDetails(nxt.mediaType, nxt.tmdbId, "force-cache");
   }, [feed, i, fetchDetails]);
 
+  // Drag/tap
   const cardWrapRef = useRef<HTMLDivElement | null>(null);
   const startX = useRef<number | null>(null);
   const startT = useRef<number>(0);
 
   const resetCardTransform = useCallback(() => {
-    if (cardWrapRef.current) {
-      cardWrapRef.current.style.transition = "transform 180ms ease-out";
-      cardWrapRef.current.style.transform = "";
-    }
+    if (!cardWrapRef.current) return;
+    const el = cardWrapRef.current;
+    el.style.transition = "transform 180ms ease-out, opacity 180ms ease-out";
+    el.style.transform = "";
+    el.style.opacity = "1";
+  }, []);
+
+  const flyOut = useCallback((dir: "left" | "right") => {
+    if (!cardWrapRef.current) return;
+    const el = cardWrapRef.current;
+    setAnimLock(dir);
+    el.style.transition = "transform 220ms ease-in, opacity 220ms ease-in";
+    el.style.transform = dir === "right" ? "translateX(480px) rotate(16deg)" : "translateX(-480px) rotate(-16deg)";
+    el.style.opacity = "0.75";
+    window.setTimeout(() => {
+      setI(v => v + 1);
+      setFlip(false);
+      setAnimLock(false);
+      // nollställ inför nästa kort
+      el.style.transition = "transform 0s, opacity 0s";
+      el.style.transform = "";
+      el.style.opacity = "1";
+    }, 220);
   }, []);
 
   const decide = useCallback(async (kind: "like" | "dislike" | "skip" | "seen") => {
-    resetCardTransform();
     const idx = indexRef.current;
     const item = feedRef.current[idx];
     if (!item || item.type === "ad") {
@@ -128,6 +156,12 @@ function SwipeInner() {
       setFlip(false);
       return;
     }
+    // haptics + animation först (snabb UI-respons)
+    if (kind === "like") { vibrate(12); flyOut("right"); }
+    else if (kind === "dislike") { vibrate(10); flyOut("left"); }
+    else { resetCardTransform(); }
+
+    // logga beslut i bakgrunden
     try {
       await fetch("/api/rate", {
         method: "POST",
@@ -135,16 +169,13 @@ function SwipeInner() {
         body: JSON.stringify({ tmdbId: item.tmdbId, mediaType: item.mediaType, decision: kind }),
       });
     } catch { /* ignore */ }
-    finally {
-      setI(v => v + 1);
-      setFlip(false);
-    }
-  }, [resetCardTransform]);
+  }, [flyOut, resetCardTransform]);
 
   const toggleWatch = useCallback(async () => {
     const idx = indexRef.current;
     const item = feedRef.current[idx];
     if (!isRec(item)) return;
+    vibrate(20);
     try {
       await fetch("/api/watchlist/toggle", {
         method: "POST",
@@ -154,6 +185,7 @@ function SwipeInner() {
     } catch { /* ignore */ }
   }, []);
 
+  // Tangentbord
   const handleKey = useCallback((e: KeyboardEvent) => {
     const idx = indexRef.current;
     const item = feedRef.current[idx];
@@ -163,38 +195,40 @@ function SwipeInner() {
       }
       return;
     }
-    if (e.key === "ArrowLeft") decide("dislike");
-    else if (e.key === "ArrowRight") decide("like");
+    if (e.key === "ArrowLeft" && !animLock) decide("dislike");
+    else if (e.key === "ArrowRight" && !animLock) decide("like");
     else if (e.key === "ArrowUp") toggleWatch();
     else if (e.key === " ") setFlip(f => !f);
-  }, [decide, toggleWatch]);
+  }, [decide, toggleWatch, animLock]);
 
   useEffect(() => {
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
   }, [handleKey]);
 
+  // Pointer
   const onPointerDown = useCallback((e: React.PointerEvent) => {
+    if (animLock) return;
     startX.current = e.clientX; startT.current = e.timeStamp;
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
     if (cardWrapRef.current) cardWrapRef.current.style.transition = "transform 0s";
-  }, []);
+  }, [animLock]);
   const onPointerMove = useCallback((e: React.PointerEvent) => {
-    if (startX.current == null || !cardWrapRef.current) return;
+    if (startX.current == null || !cardWrapRef.current || animLock) return;
     const dx = e.clientX - startX.current;
     cardWrapRef.current.style.transform = `translateX(${dx}px) rotate(${dx / 20}deg)`;
-  }, []);
+  }, [animLock]);
   const onPointerEnd = useCallback((e: React.PointerEvent) => {
     const sx = startX.current; startX.current = null;
     (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
-    if (sx == null) return;
+    if (sx == null || animLock) return;
     const dx = e.clientX - sx; const dt = e.timeStamp - startT.current;
     const isTap = Math.abs(dx) < 10 && dt < 300;
     if (isTap) { setFlip(f => !f); resetCardTransform(); return; }
     if (dx > 120) { decide("like"); return; }
     if (dx < -120) { decide("dislike"); return; }
     resetCardTransform();
-  }, [decide, resetCardTransform]);
+  }, [decide, resetCardTransform, animLock]);
 
   const cur = feed[i];
   if (err) return <div className="p-6 text-red-500">{err}</div>;
@@ -203,110 +237,114 @@ function SwipeInner() {
   const dKey = isRec(cur) ? `${cur.mediaType}:${cur.tmdbId}` : "";
   const det = isRec(cur) ? detailsMap[dKey] : undefined;
 
+  // nästa kort för mini-stack
+  const nxt = feed[i + 1];
+  const nxtKey = isRec(nxt) ? `${nxt.mediaType}:${nxt.tmdbId}` : "";
+  const detNext = isRec(nxt) ? detailsMap[nxtKey] : undefined;
+
   return (
-    <div className="mx-auto max-w-5xl p-6">
+    <div className="mx-auto max-w-xl p-6">
       <h1 className="mb-4 text-2xl font-bold">Dina förslag</h1>
 
-      <div className="md:grid md:grid-cols-[minmax(0,1fr)_320px] md:gap-6">
-        {/* KORTET (vänster) */}
-        <div>
-          {cur.type === "ad" ? (
-            <div className="mb-4 rounded-xl border p-5">
-              <div className="mb-1 text-xs opacity-60">Annons</div>
-              <div className="font-semibold">{cur.headline}</div>
-              <div className="text-sm opacity-80">{cur.body}</div>
-              <a className="text-sm underline" href={cur.href}>{cur.cta}</a>
-            </div>
-          ) : (
-            <>
+      {cur.type === "ad" ? (
+        <div className="mb-4 rounded-xl border p-5">
+          <div className="mb-1 text-xs opacity-60">Annons</div>
+          <div className="font-semibold">{cur.headline}</div>
+          <div className="text-sm opacity-80">{cur.body}</div>
+          <a className="text-sm underline" href={cur.href}>{cur.cta}</a>
+        </div>
+      ) : (
+        <>
+          <div
+            className="[perspective:1000px] select-none cursor-grab active:cursor-grabbing"
+            style={{ touchAction: "pan-y" }}
+            onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
+            onPointerUp={onPointerEnd}
+            onPointerCancel={onPointerEnd}
+          >
+            <div className="relative w-full" style={{ aspectRatio: "2 / 3" }}>
+              {/* next-card preview (mini-stack) */}
               <div
-                className="[perspective:1000px] select-none cursor-grab active:cursor-grabbing"
-                style={{ touchAction: "pan-y" }}
-                onPointerDown={onPointerDown}
-                onPointerMove={onPointerMove}
-                onPointerUp={onPointerEnd}
-                onPointerCancel={onPointerEnd}
+                className="absolute inset-0 z-0 overflow-hidden rounded-xl border shadow"
+                style={{ transform: "translateY(12px) scale(0.96)", opacity: 0.9 }}
+                aria-hidden
               >
-                <div
-                  ref={cardWrapRef}
-                  className="relative w-full overflow-hidden rounded-xl border shadow"
-                  style={{ aspectRatio: "2 / 3" }}
-                >
-                  <div className={`absolute inset-0 transition-transform duration-300 [transform-style:preserve-3d] ${flip ? "[transform:rotateY(180deg)]" : ""}`}>
-                    {/* FRONT */}
-                    <div className="absolute inset-0 [backface-visibility:hidden]">
-                      {det?.posterPath ? (
-                        <Image
-                          src={`https://image.tmdb.org/t/p/w780${det.posterPath}`}
-                          alt={det.title}
-                          fill
-                          sizes="(min-width: 768px) 640px, 100vw"
-                          className="object-cover"
-                          placeholder={det.blurDataURL ? "blur" : undefined}
-                          blurDataURL={det.blurDataURL || undefined}
-                          priority={i === 0}
-                        />
-                      ) : (
-                        <div className="absolute inset-0 rounded-xl bg-[linear-gradient(90deg,rgba(255,255,255,0.06)_25%,rgba(255,255,255,0.12)_37%,rgba(255,255,255,0.06)_63%)] bg-[length:400%_100%] animate-[shimmer_1.2s_infinite]" />
-                      )}
-                      {/* Overlay */}
-                      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-black/70 via-black/20 to-transparent p-3 text-white">
-                        <div className="flex items-end justify-between gap-3">
-                          <div className="min-w-0">
-                            <div className="truncate text-base font-semibold">{det?.title ?? cur.title}</div>
-                            <div className="text-xs opacity-90">{det?.year ?? "—"}</div>
-                          </div>
-                          <div className="shrink-0 text-sm font-medium">★ {fmtRating(det?.voteAverage ?? null)}</div>
-                        </div>
-                      </div>
-                    </div>
+                {detNext?.posterPath ? (
+                  <Image
+                    src={`https://image.tmdb.org/t/p/w500${detNext.posterPath}`}
+                    alt={detNext.title}
+                    fill
+                    sizes="(min-width: 768px) 640px, 100vw"
+                    className="object-cover"
+                    placeholder={detNext.blurDataURL ? "blur" : undefined}
+                    blurDataURL={detNext.blurDataURL || undefined}
+                  />
+                ) : (
+                  <div className="absolute inset-0 rounded-xl bg-[linear-gradient(90deg,rgba(255,255,255,0.06)_25%,rgba(255,255,255,0.12)_37%,rgba(255,255,255,0.06)_63%)] bg-[length:400%_100%] animate-[shimmer_1.2s_infinite]" />
+                )}
+              </div>
 
-                    {/* BACK */}
-                    <div className="absolute inset-0 bg-black/55 p-4 text-white [backface-visibility:hidden] [transform:rotateY(180deg)]">
-                      <div className="mb-1 text-lg font-semibold">
-                        {det?.title || cur.title} {det?.year ? <span className="text-xs opacity-70">[{det.year}]</span> : null}
+              {/* active card */}
+              <div
+                ref={cardWrapRef}
+                className="absolute inset-0 z-10 overflow-hidden rounded-xl border shadow"
+              >
+                <div className={`absolute inset-0 transition-transform duration-300 [transform-style:preserve-3d] ${flip ? "[transform:rotateY(180deg)]" : ""}`}>
+                  {/* FRONT */}
+                  <div className="absolute inset-0 [backface-visibility:hidden]">
+                    {det?.posterPath ? (
+                      <Image
+                        src={`https://image.tmdb.org/t/p/w780${det.posterPath}`}
+                        alt={det.title}
+                        fill
+                        sizes="(min-width: 768px) 640px, 100vw"
+                        className="object-cover"
+                        placeholder={det.blurDataURL ? "blur" : undefined}
+                        blurDataURL={det.blurDataURL || undefined}
+                        priority={i === 0}
+                      />
+                    ) : (
+                      <div className="absolute inset-0 rounded-xl bg-[linear-gradient(90deg,rgba(255,255,255,0.06)_25%,rgba(255,255,255,0.12)_37%,rgba(255,255,255,0.06)_63%)] bg-[length:400%_100%] animate-[shimmer_1.2s_infinite]" />
+                    )}
+                    {/* Overlay */}
+                    <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-black/70 via-black/20 to-transparent p-3 text-white">
+                      <div className="flex items-end justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="truncate text-base font-semibold">{det?.title ?? cur.title}</div>
+                          <div className="text-xs opacity-90">{det?.year ?? "—"}</div>
+                        </div>
+                        <div className="shrink-0 text-sm font-medium">★ {fmtRating(det?.voteAverage ?? null)}</div>
                       </div>
-                      <div className="mb-3 mt-2 flex flex-wrap gap-2">
-                        {(cur.matchedProviders.length ? cur.matchedProviders : (cur.unknown ? ["Okänd"] : []))
-                          .map((p) => (
-                            <span key={p} className="rounded-full border border-white/30 bg-white/10 px-2 py-1 text-xs">
-                              {p}
-                            </span>
-                          ))}
-                      </div>
-                      <p className="text-sm opacity-90">{det ? det.overview || "Ingen beskrivning." : "Laddar info…"}</p>
                     </div>
+                  </div>
+
+                  {/* BACK */}
+                  <div className="absolute inset-0 bg-black/55 p-4 text-white [backface-visibility:hidden] [transform:rotateY(180deg)]">
+                    <div className="mb-1 text-lg font-semibold">
+                      {det?.title || cur.title} {det?.year ? <span className="text-xs opacity-70">[{det.year}]</span> : null}
+                    </div>
+                    <div className="mb-3 mt-2 flex flex-wrap gap-2">
+                      {(cur.matchedProviders.length ? cur.matchedProviders : (cur.unknown ? ["Okänd"] : []))
+                        .map((p) => (
+                          <span key={p} className="rounded-full border border-white/30 bg-white/10 px-2 py-1 text-xs">{p}</span>
+                        ))}
+                    </div>
+                    <p className="text-sm opacity-90">{det ? det.overview || "Ingen beskrivning." : "Laddar info…"}</p>
                   </div>
                 </div>
               </div>
+            </div>
+          </div>
 
-              {/* Tinder-lik dock */}
-              <ActionDock
-                onNope={() => decide("dislike")}
-                onInfo={() => setFlip(f => !f)}
-                onWatchlist={toggleWatch}
-                onLike={() => decide("like")}
-              />
-            </>
-          )}
-        </div>
-
-        {/* INFOPANEL (höger – desktop) */}
-        {isRec(cur) && (
-          <InfoPanel
-            title={det?.title || cur.title}
-            year={det?.year ?? null}
-            rating={det?.voteAverage ?? null}
-            overview={det?.overview}
-            providers={cur.matchedProviders}
-            unknown={cur.unknown}
+          <ActionDock
             onNope={() => decide("dislike")}
-            onLike={() => decide("like")}
+            onInfo={() => setFlip(f => !f)}
             onWatchlist={toggleWatch}
-            className="md:mt-1"
+            onLike={() => decide("like")}
           />
-        )}
-      </div>
+        </>
+      )}
 
       <div className="mt-4 text-sm opacity-70">
         Tips: Tap/klick för att vända. ←/→ Nej/Ja, ↑ Watchlist, Space vänd.

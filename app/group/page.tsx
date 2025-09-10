@@ -5,7 +5,6 @@ import { useSearchParams } from "next/navigation";
 import Image from "next/image";
 import AppShell from "../components/layouts/AppShell";
 import ActionDock from "../components/ui/ActionDock";
-import InfoPanel from "../components/panels/InfoPanel";
 
 export const dynamic = "force-dynamic";
 
@@ -37,6 +36,12 @@ type ApiDetailsErr = { ok: false; error: string };
 
 function isRec(x: FeedItem): x is RecItem { return x.type === "rec"; }
 function fmtRating(v: number | null): string { return v == null ? "–" : (Math.round(v * 10) / 10).toFixed(1); }
+function vibrate(ms: number) {
+  if (typeof navigator !== "undefined" && "vibrate" in navigator) {
+    // @ts-expect-error vibrate present in browsers
+    navigator.vibrate(ms);
+  }
+}
 
 function GroupSwipeInner() {
   const sp = useSearchParams();
@@ -48,6 +53,7 @@ function GroupSwipeInner() {
   const [flip, setFlip] = useState(false);
   const [matchFound, setMatchFound] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [animLock, setAnimLock] = useState<false | "left" | "right">(false);
 
   const [detailsMap, setDetailsMap] = useState<Record<string, Details>>({});
   const feedRef = useRef<FeedItem[]>([]);
@@ -107,20 +113,40 @@ function GroupSwipeInner() {
   const startT = useRef<number>(0);
 
   const resetCard = useCallback(() => {
-    if (cardRef.current) {
-      cardRef.current.style.transition = "transform 180ms ease-out";
-      cardRef.current.style.transform = "";
-    }
+    if (!cardRef.current) return;
+    const el = cardRef.current;
+    el.style.transition = "transform 180ms ease-out, opacity 180ms ease-out";
+    el.style.transform = "";
+    el.style.opacity = "1";
+  }, []);
+
+  const flyOut = useCallback((dir: "left" | "right") => {
+    if (!cardRef.current) return;
+    const el = cardRef.current;
+    setAnimLock(dir);
+    el.style.transition = "transform 220ms ease-in, opacity 220ms ease-in";
+    el.style.transform = dir === "right" ? "translateX(480px) rotate(16deg)" : "translateX(-480px) rotate(-16deg)";
+    el.style.opacity = "0.75";
+    window.setTimeout(() => {
+      setIdx(v => v + 1);
+      setFlip(false);
+      setAnimLock(false);
+      el.style.transition = "transform 0s, opacity 0s";
+      el.style.transform = "";
+      el.style.opacity = "1";
+    }, 220);
   }, []);
 
   const decide = useCallback(async (decision: "like" | "dislike") => {
-    resetCard();
     const item = feedRef.current[indexRef.current];
     if (!item || !isRec(item)) {
       setIdx(v => v + 1);
       setFlip(false);
       return;
     }
+    if (decision === "like") { vibrate(12); flyOut("right"); }
+    else { vibrate(10); flyOut("left"); }
+
     try {
       await fetch("/api/rate", {
         method: "POST",
@@ -135,15 +161,12 @@ function GroupSwipeInner() {
         }
       }
     } catch { /* ignore */ }
-    finally {
-      setIdx(v => v + 1);
-      setFlip(false);
-    }
-  }, [code, resetCard]);
+  }, [code, flyOut]);
 
   const toggleWatch = useCallback(async () => {
     const item = feedRef.current[indexRef.current];
     if (!item || !isRec(item)) return;
+    vibrate(20);
     await fetch("/api/watchlist/toggle", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -155,31 +178,32 @@ function GroupSwipeInner() {
     const key = (e: KeyboardEvent) => {
       const item = feedRef.current[indexRef.current];
       if (!item) return;
-      if (e.key === "ArrowLeft") decide("dislike");
-      else if (e.key === "ArrowRight") decide("like");
+      if (e.key === "ArrowLeft" && !animLock) decide("dislike");
+      else if (e.key === "ArrowRight" && !animLock) decide("like");
       else if (e.key === "ArrowUp") toggleWatch();
       else if (e.key === " ") setFlip(f => !f);
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
-  }, [decide, toggleWatch]);
+  }, [decide, toggleWatch, animLock]);
 
   const onPointerDown = useCallback((e: React.PointerEvent) => {
+    if (animLock) return;
     startX.current = e.clientX;
     startT.current = e.timeStamp;
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
     if (cardRef.current) cardRef.current.style.transition = "transform 0s";
-  }, []);
+  }, [animLock]);
   const onPointerMove = useCallback((e: React.PointerEvent) => {
-    if (startX.current == null || !cardRef.current) return;
+    if (startX.current == null || !cardRef.current || animLock) return;
     const dx = e.clientX - startX.current;
     cardRef.current.style.transform = `translateX(${dx}px) rotate(${dx / 20}deg)`;
-  }, []);
+  }, [animLock]);
   const onPointerEnd = useCallback((e: React.PointerEvent) => {
     const sx = startX.current;
     startX.current = null;
     (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
-    if (sx == null) return;
+    if (sx == null || animLock) return;
 
     const dx = e.clientX - sx;
     const dt = e.timeStamp - startT.current;
@@ -189,10 +213,14 @@ function GroupSwipeInner() {
     if (dx > 120) { decide("like"); return; }
     if (dx < -120) { decide("dislike"); return; }
     resetCard();
-  }, [decide, resetCard]);
+  }, [decide, resetCard, animLock]);
 
   const current = feed[idx];
   const details = current && isRec(current) ? detailsMap[`${current.mediaType}:${current.tmdbId}`] : undefined;
+
+  // nästa för mini-stack
+  const nextItem = feed[idx + 1];
+  const dNext = nextItem && isRec(nextItem) ? detailsMap[`${nextItem.mediaType}:${nextItem.tmdbId}`] : undefined;
 
   if (!code) {
     return (
@@ -204,7 +232,7 @@ function GroupSwipeInner() {
   }
 
   return (
-    <main className="mx-auto max-w-5xl p-6">
+    <main className="mx-auto max-w-xl p-6">
       <h1 className="mb-1 text-2xl font-semibold">Grupp-swipe</h1>
       <p className="mb-4 opacity-80">Kod: <span className="font-mono">{code}</span></p>
 
@@ -218,26 +246,41 @@ function GroupSwipeInner() {
       {err && <div className="mb-4 text-red-500">{err}</div>}
       {loading && <p>Laddar förslag…</p>}
 
-      {!loading && current && (
-        <div className="md:grid md:grid-cols-[minmax(0,1fr)_320px] md:gap-6">
-          {/* Kort (vänster) */}
-          <div>
-            <div
-              className="[perspective:1000px] select-none cursor-grab active:cursor-grabbing"
-              style={{ touchAction: "pan-y" }}
-              onPointerDown={onPointerDown}
-              onPointerMove={onPointerMove}
-              onPointerUp={onPointerEnd}
-              onPointerCancel={onPointerEnd}
-            >
+      {!loading && current && isRec(current) && (
+        <>
+          <div
+            className="[perspective:1000px] select-none cursor-grab active:cursor-grabbing"
+            style={{ touchAction: "pan-y" }}
+            onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
+            onPointerUp={onPointerEnd}
+            onPointerCancel={onPointerEnd}
+          >
+            <div className="relative w-full" style={{ aspectRatio: "2 / 3" }}>
+              {/* next preview */}
               <div
-                ref={cardRef}
-                className="relative w-full overflow-hidden rounded-xl border shadow"
-                style={{ aspectRatio: "2 / 3" }}
+                className="absolute inset-0 z-0 overflow-hidden rounded-xl border shadow"
+                style={{ transform: "translateY(12px) scale(0.96)", opacity: 0.9 }}
+                aria-hidden
               >
-                <div
-                  className={`absolute inset-0 transition-transform duration-300 [transform-style:preserve-3d] ${flip ? "[transform:rotateY(180deg)]" : ""}`}
-                >
+                {dNext?.posterPath ? (
+                  <Image
+                    src={`https://image.tmdb.org/t/p/w500${dNext.posterPath}`}
+                    alt={dNext.title}
+                    fill
+                    sizes="(min-width: 768px) 640px, 100vw"
+                    className="object-cover"
+                    placeholder={dNext.blurDataURL ? "blur" : undefined}
+                    blurDataURL={dNext.blurDataURL || undefined}
+                  />
+                ) : (
+                  <div className="absolute inset-0 rounded-xl bg-[linear-gradient(90deg,rgba(255,255,255,0.06)_25%,rgba(255,255,255,0.12)_37%,rgba(255,255,255,0.06)_63%)] bg-[length:400%_100%] animate-[shimmer_1.2s_infinite]" />
+                )}
+              </div>
+
+              {/* active card */}
+              <div ref={cardRef} className="absolute inset-0 z-10 overflow-hidden rounded-xl border shadow">
+                <div className={`absolute inset-0 transition-transform duration-300 [transform-style:preserve-3d] ${flip ? "[transform:rotateY(180deg)]" : ""}`}>
                   {/* FRONT */}
                   <div className="absolute inset-0 [backface-visibility:hidden]">
                     {details?.posterPath ? (
@@ -254,13 +297,10 @@ function GroupSwipeInner() {
                     ) : (
                       <div className="absolute inset-0 rounded-xl bg-[linear-gradient(90deg,rgba(255,255,255,0.06)_25%,rgba(255,255,255,0.12)_37%,rgba(255,255,255,0.06)_63%)] bg-[length:400%_100%] animate-[shimmer_1.2s_infinite]" />
                     )}
-
                     <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-black/70 via-black/20 to-transparent p-3 text-white">
                       <div className="flex items-end justify-between gap-3">
                         <div className="min-w-0">
-                          <div className="truncate text-base font-semibold">
-                            {details?.title ?? (isRec(current) ? current.title : "")}
-                          </div>
+                          <div className="truncate text-base font-semibold">{details?.title ?? current.title}</div>
                           <div className="text-xs opacity-90">{details?.year ?? "—"}</div>
                         </div>
                         <div className="shrink-0 text-sm font-medium">★ {fmtRating(details?.voteAverage ?? null)}</div>
@@ -270,54 +310,29 @@ function GroupSwipeInner() {
 
                   {/* BACK */}
                   <div className="absolute inset-0 bg-black/55 p-4 text-white [backface-visibility:hidden] [transform:rotateY(180deg)]">
-                    {isRec(current) && (
-                      <>
-                        <div className="mb-1 text-lg font-semibold">
-                          {details?.title || current.title}{" "}
-                          {details?.year ? <span className="text-xs opacity-70">[{details.year}]</span> : null}
-                        </div>
-                        <div className="mb-3 mt-2 flex flex-wrap gap-2">
-                          {(current.matchedProviders.length ? current.matchedProviders : (current.unknown ? ["Okänd"] : []))
-                            .map((p) => (
-                              <span key={p} className="rounded-full border border-white/30 bg-white/10 px-2 py-1 text-xs">
-                                {p}
-                              </span>
-                            ))}
-                        </div>
-                        <p className="text-sm opacity-90">
-                          {details ? details.overview || "Ingen beskrivning." : "Laddar info…"}
-                        </p>
-                      </>
-                    )}
+                    <div className="mb-1 text-lg font-semibold">
+                      {details?.title || current.title} {details?.year ? <span className="text-xs opacity-70">[{details.year}]</span> : null}
+                    </div>
+                    <div className="mb-3 mt-2 flex flex-wrap gap-2">
+                      {(current.matchedProviders.length ? current.matchedProviders : (current.unknown ? ["Okänd"] : []))
+                        .map((p) => (
+                          <span key={p} className="rounded-full border border-white/30 bg-white/10 px-2 py-1 text-xs">{p}</span>
+                        ))}
+                    </div>
+                    <p className="text-sm opacity-90">{details ? details.overview || "Ingen beskrivning." : "Laddar info…"}</p>
                   </div>
                 </div>
               </div>
             </div>
-
-            <ActionDock
-              onNope={() => decide("dislike")}
-              onInfo={() => setFlip(f => !f)}
-              onWatchlist={toggleWatch}
-              onLike={() => decide("like")}
-            />
           </div>
 
-          {/* InfoPanel (höger) */}
-          {isRec(current) && (
-            <InfoPanel
-              title={details?.title || current.title}
-              year={details?.year ?? null}
-              rating={details?.voteAverage ?? null}
-              overview={details?.overview}
-              providers={current.matchedProviders}
-              unknown={current.unknown}
-              onNope={() => decide("dislike")}
-              onLike={() => decide("like")}
-              onWatchlist={toggleWatch}
-              className="md:mt-1"
-            />
-          )}
-        </div>
+          <ActionDock
+            onNope={() => decide("dislike")}
+            onInfo={() => setFlip(f => !f)}
+            onWatchlist={toggleWatch}
+            onLike={() => decide("like")}
+          />
+        </>
       )}
 
       {!loading && !current && (
@@ -327,9 +342,7 @@ function GroupSwipeInner() {
         </div>
       )}
 
-      <style jsx>{`
-        @keyframes shimmer { 0% { background-position: 100% 0; } 100% { background-position: 0 0; } }
-      `}</style>
+      <style jsx>{`@keyframes shimmer { 0% { background-position: 100% 0 } 100% { background-position: 0 0 } }`}</style>
     </main>
   );
 }
