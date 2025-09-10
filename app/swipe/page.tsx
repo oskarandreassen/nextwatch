@@ -35,8 +35,8 @@ type Details = {
   mediaType: "movie" | "tv";
   title: string;
   overview: string;
-  posterUrl: string | null;   // kvar för back-compat
-  posterPath: string | null;  // används för skarpare w780 på fronten
+  posterUrl: string | null;   // back-compat (w500)
+  posterPath: string | null;  // används för w780 (skarpare)
   year: string | null;
 };
 type ApiDetailsOk = Details & { ok: true };
@@ -76,7 +76,8 @@ function SwipeInner() {
         const js = await r.json();
         if (cancelled) return;
         if (js?.ok) {
-          setFeed(js.feed as FeedItem[]);
+          const f = js.feed as FeedItem[];
+          setFeed(f);
           setI(0);
           setFlip(false);
           setErr("");
@@ -90,35 +91,36 @@ function SwipeInner() {
     return () => { cancelled = true; };
   }, [media]);
 
-  // Prefetcha detaljer för aktuell rec
+  // Helper: hämta details strikt typat
+  const fetchDetails = useCallback(async (type: "movie" | "tv", id: number) => {
+    const key = `${type}:${id}`;
+    if (detailsRef.current[key]) return; // redan cache:ad
+    try {
+      const r = await fetch(`/api/tmdb/details?type=${type}&id=${id}`, { cache: "force-cache" });
+      const js = (await r.json()) as ApiDetailsOk | ApiDetailsErr;
+      if (!js.ok) return;
+      setDetailsMap(prev => ({
+        ...prev,
+        [`${js.mediaType}:${js.id}`]: {
+          id: js.id,
+          mediaType: js.mediaType,
+          title: js.title,
+          overview: js.overview,
+          posterUrl: js.posterUrl,
+          posterPath: js.posterPath,
+          year: js.year,
+        },
+      }));
+    } catch { /* ignore */ }
+  }, []);
+
+  // Prefetch AV BÅDE AKTUELL OCH NÄSTA: fixar “första kortet saknar poster”
   useEffect(() => {
     const cur = feed[i];
-    if (!isRec(cur)) return;
-    const key = `${cur.mediaType}:${cur.tmdbId}`;
-    if (detailsRef.current[key]) return;
-
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await fetch(`/api/tmdb/details?type=${cur.mediaType}&id=${cur.tmdbId}`, { cache: "force-cache" });
-        const js = (await r.json()) as ApiDetailsOk | ApiDetailsErr;
-        if (cancelled || !js.ok) return;
-        setDetailsMap(prev => ({
-          ...prev,
-          [`${js.mediaType}:${js.id}`]: {
-            id: js.id,
-            mediaType: js.mediaType,
-            title: js.title,
-            overview: js.overview,
-            posterUrl: js.posterUrl,
-            posterPath: js.posterPath,
-            year: js.year,
-          },
-        }));
-      } catch { /* ignore */ }
-    })();
-    return () => { cancelled = true; };
-  }, [feed, i]);
+    if (isRec(cur)) fetchDetails(cur.mediaType, cur.tmdbId);
+    const nxt = feed[i + 1];
+    if (isRec(nxt)) fetchDetails(nxt.mediaType, nxt.tmdbId);
+  }, [feed, i, fetchDetails]);
 
   const decide = useCallback(async (kind: "like" | "dislike" | "skip" | "seen") => {
     const idx = indexRef.current;
@@ -178,27 +180,37 @@ function SwipeInner() {
 
   const cur = feed[i];
 
-  // enkel drag
-  const cardRef = useRef<HTMLDivElement | null>(null);
+  // ---- Drag/Swipe förbättrat för mobil ----
+  const cardWrapRef = useRef<HTMLDivElement | null>(null);
   const startX = useRef<number | null>(null);
 
   const onPointerDown = useCallback((e: React.PointerEvent) => {
     startX.current = e.clientX;
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    if (cardWrapRef.current) cardWrapRef.current.style.transition = "transform 0s";
   }, []);
   const onPointerMove = useCallback((e: React.PointerEvent) => {
-    if (startX.current == null || !cardRef.current) return;
+    if (startX.current == null || !cardWrapRef.current) return;
     const dx = e.clientX - startX.current;
-    cardRef.current.style.transform = `translateX(${dx}px) rotate(${dx / 20}deg)`;
+    cardWrapRef.current.style.transform = `translateX(${dx}px) rotate(${dx / 20}deg)`;
   }, []);
-  const onPointerUp = useCallback((e: React.PointerEvent) => {
-    if (startX.current == null || !cardRef.current) return;
+  const resetCardTransform = useCallback(() => {
+    if (cardWrapRef.current) {
+      cardWrapRef.current.style.transition = "transform 200ms ease-out";
+      cardWrapRef.current.style.transform = "";
+    }
+  }, []);
+  const onPointerEnd = useCallback((e: React.PointerEvent) => {
+    if (startX.current == null) return;
     const dx = e.clientX - startX.current;
-    cardRef.current.style.transform = "";
+    (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
     startX.current = null;
-    if (dx > 120) decide("like");
-    else if (dx < -120) decide("dislike");
-  }, [decide]);
+    if (dx > 120) { decide("like"); return; }
+    if (dx < -120) { decide("dislike"); return; }
+    resetCardTransform(); // snäpp tillbaka
+  }, [decide, resetCardTransform]);
+
+  // ----------------------------------------
 
   if (err) return <div className="p-6 text-red-500">{err}</div>;
   if (!cur) return <div className="p-6">Slut på förslag för nu.</div>;
@@ -222,60 +234,77 @@ function SwipeInner() {
         </div>
       ) : (
         <>
-          {/* FRONT: poster, fast 2:3-storlek, skarp */}
+          {/* FLIP-CONTAINER: front = poster, back = detaljer */}
           <div
-            ref={cardRef}
+            className="[perspective:1000px] select-none cursor-grab active:cursor-grabbing"
+            style={{ touchAction: "pan-y" }}
             onPointerDown={onPointerDown}
             onPointerMove={onPointerMove}
-            onPointerUp={onPointerUp}
-            className="relative w-full overflow-hidden rounded-xl border shadow"
-            style={{ aspectRatio: "2 / 3" }}
+            onPointerUp={onPointerEnd}
+            onPointerCancel={onPointerEnd}
           >
-            {det?.posterPath ? (
-              <Image
-                src={`https://image.tmdb.org/t/p/w780${det.posterPath}`}
-                alt={det.title}
-                fill
-                sizes="(min-width: 768px) 640px, 100vw"
-                className="object-cover"
-                priority
-              />
-            ) : (
-              <div className="absolute inset-0 flex items-center justify-center text-xs opacity-70">
-                Ingen poster
+            <div
+              ref={cardWrapRef}
+              className="relative w-full overflow-hidden rounded-xl border shadow"
+              style={{ aspectRatio: "2 / 3" }}
+            >
+              <div
+                className={`absolute inset-0 transition-transform duration-300 [transform-style:preserve-3d] ${
+                  flip ? "[transform:rotateY(180deg)]" : ""
+                }`}
+              >
+                {/* FRONT: poster (w780) */}
+                <div className="absolute inset-0 [backface-visibility:hidden]">
+                  {det?.posterPath ? (
+                    <Image
+                      src={`https://image.tmdb.org/t/p/w780${det.posterPath}`}
+                      alt={det.title}
+                      fill
+                      sizes="(min-width: 768px) 640px, 100vw"
+                      className="object-cover"
+                      priority
+                    />
+                  ) : (
+                    // Skeleton tills details är hämtat
+                    <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.06)_25%,rgba(255,255,255,0.12)_37%,rgba(255,255,255,0.06)_63%)] bg-[length:400%_100%] animate-[shimmer_1.2s_infinite] rounded-xl" />
+                  )}
+                </div>
+
+                {/* BACK: detaljer */}
+                <div className="absolute inset-0 p-4 [backface-visibility:hidden] [transform:rotateY(180deg)] bg-black/50 text-white">
+                  <div className="text-lg font-semibold mb-1">
+                    {det?.title || cur.title} {det?.year ? <span className="text-xs opacity-70">[{det.year}]</span> : null}
+                  </div>
+                  <div className="text-sm opacity-80 mb-2">
+                    Providers: {cur.matchedProviders.join(", ") || (cur.unknown ? "Okänd" : "—")}
+                  </div>
+                  <p className="text-sm opacity-90">{det ? det.overview || "Ingen beskrivning." : "Laddar info…"}</p>
+                </div>
               </div>
-            )}
+            </div>
           </div>
 
-          {/* Knappar under kortet */}
+          {/* Knappar */}
           <div className="mt-3 flex justify-center gap-3">
             <button className="border rounded px-4 py-2" onClick={() => decide("dislike")}>Nej ←</button>
             <button className="border rounded px-4 py-2" onClick={() => setFlip(f => !f)}>Info</button>
             <button className="border rounded px-4 py-2" onClick={() => decide("like")}>Ja →</button>
             <button className="border rounded px-4 py-2" onClick={toggleWatch}>+ Watchlist ↑</button>
           </div>
-
-          {/* BACK: detaljer (visas när flip är true) */}
-          {flip && (
-            <div className="mt-4 rounded-xl border p-4">
-              <div className="text-lg font-semibold mb-1">
-                {det?.title || cur.title} {det?.year ? <span className="text-xs opacity-70">[{det.year}]</span> : null}
-              </div>
-              <div className="text-sm opacity-80 mb-2">
-                Providers: {cur.matchedProviders.join(", ") || (cur.unknown ? "Okänd" : "—")}
-              </div>
-              <p className="text-sm opacity-90">{det ? det.overview || "Ingen beskrivning." : "Laddar info…"}</p>
-              <div className="mt-3">
-                <button className="border rounded px-3 py-1" onClick={() => setFlip(false)}>Till framsidan</button>
-              </div>
-            </div>
-          )}
         </>
       )}
 
       <div className="mt-4 text-sm opacity-70">
         Tips: ←/→ för Nej/Ja, ↑ för Watchlist, Space för att vända kortet.
       </div>
+
+      {/* keyframes för skeleton */}
+      <style jsx>{`
+        @keyframes shimmer {
+          0% { background-position: 100% 0; }
+          100% { background-position: 0 0; }
+        }
+      `}</style>
     </div>
   );
 }
