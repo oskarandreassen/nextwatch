@@ -4,7 +4,13 @@ import React, { Suspense, useCallback, useEffect, useRef, useState } from "react
 import { useSearchParams } from "next/navigation";
 import Image from "next/image";
 
-export const dynamic = "force-dynamic";
+export default function SwipePage() {
+  return (
+    <Suspense fallback={<div className="p-6">Laddar…</div>}>
+      <SwipeInner />
+    </Suspense>
+  );
+}
 
 type RecItem = {
   type: "rec";
@@ -25,48 +31,62 @@ type Details = {
   posterUrl: string | null;
   posterPath: string | null;
   year: string | null;
+  voteAverage: number | null;
+  voteCount: number | null;
 };
 type ApiDetailsOk = Details & { ok: true };
 type ApiDetailsErr = { ok: false; error: string };
 
-function isRec(x: FeedItem): x is RecItem { return x.type === "rec"; }
+function isRec(x: FeedItem | undefined): x is RecItem {
+  return !!x && x.type === "rec";
+}
 
-function GroupSwipeInner() {
+function formatRating(v: number | null): string {
+  if (v == null) return "–";
+  return `${(Math.round(v * 10) / 10).toFixed(1)}`; // 7.8
+}
+
+function SwipeInner() {
   const sp = useSearchParams();
-  const code = (sp.get("code") || "").toUpperCase();
+  const media = (sp?.get("media") || "both") as "movie" | "tv" | "both";
 
-  const [loading, setLoading] = useState(true);
   const [feed, setFeed] = useState<FeedItem[]>([]);
-  const [idx, setIdx] = useState(0);
+  const [i, setI] = useState(0);
   const [flip, setFlip] = useState(false);
-  const [matchFound, setMatchFound] = useState<string | null>(null);
+  const [err, setErr] = useState("");
+
+  const [detailsMap, setDetailsMap] = useState<Record<string, Details>>({});
 
   const feedRef = useRef<FeedItem[]>([]);
   const indexRef = useRef(0);
-  const [detailsMap, setDetailsMap] = useState<Record<string, Details>>({});
   const detailsRef = useRef<Record<string, Details>>({});
 
   useEffect(() => { feedRef.current = feed; }, [feed]);
-  useEffect(() => { indexRef.current = idx; }, [idx]);
+  useEffect(() => { indexRef.current = i; }, [i]);
   useEffect(() => { detailsRef.current = detailsMap; }, [detailsMap]);
 
+  // ladda feed
   useEffect(() => {
-    let ignore = false;
-    async function run() {
-      if (!code) return;
-      setLoading(true);
-      const r = await fetch(`/api/recs/group?code=${encodeURIComponent(code)}`, { cache: "no-store" });
-      const j = await r.json();
-      if (ignore) return;
-      if (j?.ok) setFeed(j.feed as FeedItem[]);
-      setIdx(0);
-      setFlip(false);
-      setLoading(false);
-    }
-    run();
-    return () => { ignore = true; };
-  }, [code]);
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`/api/recs/personal?media=${media}&limit=40`, { cache: "no-store" });
+        const js = await r.json();
+        if (cancelled) return;
+        if (js?.ok) {
+          setFeed(js.feed as FeedItem[]);
+          setI(0);
+          setFlip(false);
+          setErr("");
+        } else setErr(js?.error || "Fel");
+      } catch (e) {
+        if (!cancelled) setErr(String(e));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [media]);
 
+  // hämta details (valbar cache-policy)
   const fetchDetails = useCallback(async (type: "movie" | "tv", id: number, cache: RequestCache) => {
     const key = `${type}:${id}`;
     if (detailsRef.current[key]) return;
@@ -78,118 +98,126 @@ function GroupSwipeInner() {
     } catch { /* ignore */ }
   }, []);
 
+  // Prefetch: aktuell (no-store första), samt nästa
   useEffect(() => {
-    const cur = feed[idx];
-    if (isRec(cur)) fetchDetails(cur.mediaType, cur.tmdbId, idx === 0 ? "no-store" : "force-cache");
-    const nxt = feed[idx + 1];
+    const cur = feed[i];
+    if (isRec(cur)) fetchDetails(cur.mediaType, cur.tmdbId, i === 0 ? "no-store" : "force-cache");
+    const nxt = feed[i + 1];
     if (isRec(nxt)) fetchDetails(nxt.mediaType, nxt.tmdbId, "force-cache");
-  }, [feed, idx, fetchDetails]);
+  }, [feed, i, fetchDetails]);
 
   // drag/tap
-  const cardRef = useRef<HTMLDivElement | null>(null);
+  const cardWrapRef = useRef<HTMLDivElement | null>(null);
   const startX = useRef<number | null>(null);
   const startT = useRef<number>(0);
 
-  const resetCard = useCallback(() => {
-    if (cardRef.current) {
-      cardRef.current.style.transition = "transform 180ms ease-out";
-      cardRef.current.style.transform = "";
+  const resetCardTransform = useCallback(() => {
+    if (cardWrapRef.current) {
+      cardWrapRef.current.style.transition = "transform 180ms ease-out";
+      cardWrapRef.current.style.transform = "";
     }
   }, []);
 
-  const decide = useCallback(async (decision: "like" | "dislike") => {
-    resetCard();
-    const item = feedRef.current[indexRef.current];
-    if (!item || !isRec(item)) {
-      setIdx(v => v + 1);
+  const decide = useCallback(async (kind: "like" | "dislike" | "skip" | "seen") => {
+    resetCardTransform(); // nollställ position direkt
+    const idx = indexRef.current;
+    const item = feedRef.current[idx];
+    if (!item || item.type === "ad") {
+      setI(v => v + 1);
       setFlip(false);
       return;
     }
     try {
       await fetch("/api/rate", {
         method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ tmdbId: item.tmdbId, mediaType: item.mediaType, decision, groupCode: code }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tmdbId: item.tmdbId, mediaType: item.mediaType, decision: kind }),
       });
-      if (decision === "like") {
-        const m = await fetch(`/api/group/match?code=${encodeURIComponent(code)}`, { cache: "no-store" });
-        const j = await m.json();
-        if (j?.ok && Array.isArray(j.matches) && j.matches.length > 0) {
-          setMatchFound(`Match! ${j.matches.length} träff(ar) för grupp ${code}`);
-        }
-      }
     } catch { /* ignore */ }
     finally {
-      setIdx(v => v + 1);
+      setI(v => v + 1);
       setFlip(false);
     }
-  }, [code, resetCard]);
+  }, [resetCardTransform]);
 
   const toggleWatch = useCallback(async () => {
-    const item = feedRef.current[indexRef.current];
-    if (!item || !isRec(item)) return;
-    await fetch("/api/watchlist/toggle", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ tmdbId: item.tmdbId, mediaType: item.mediaType }),
-    });
+    const idx = indexRef.current;
+    const item = feedRef.current[idx];
+    if (!isRec(item)) return;
+    try {
+      await fetch("/api/watchlist/toggle", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tmdbId: item.tmdbId, mediaType: item.mediaType, add: true }),
+      });
+    } catch { /* ignore */ }
   }, []);
+
+  // tangentbord
+  const handleKey = useCallback((e: KeyboardEvent) => {
+    const idx = indexRef.current;
+    const item = feedRef.current[idx];
+    if (!item || item.type === "ad") {
+      if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+        setI(v => v + 1); setFlip(false);
+      }
+      return;
+    }
+    if (e.key === "ArrowLeft") decide("dislike");
+    else if (e.key === "ArrowRight") decide("like");
+    else if (e.key === "ArrowUp") toggleWatch();
+    else if (e.key === " ") setFlip(f => !f);
+  }, [decide, toggleWatch]);
+
+  useEffect(() => {
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [handleKey]);
 
   const onPointerDown = useCallback((e: React.PointerEvent) => {
-    startX.current = e.clientX;
-    startT.current = e.timeStamp;
+    startX.current = e.clientX; startT.current = e.timeStamp;
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
-    if (cardRef.current) cardRef.current.style.transition = "transform 0s";
+    if (cardWrapRef.current) cardWrapRef.current.style.transition = "transform 0s";
   }, []);
   const onPointerMove = useCallback((e: React.PointerEvent) => {
-    if (startX.current == null || !cardRef.current) return;
+    if (startX.current == null || !cardWrapRef.current) return;
     const dx = e.clientX - startX.current;
-    cardRef.current.style.transform = `translateX(${dx}px) rotate(${dx / 20}deg)`;
+    cardWrapRef.current.style.transform = `translateX(${dx}px) rotate(${dx / 20}deg)`;
   }, []);
   const onPointerEnd = useCallback((e: React.PointerEvent) => {
-    const sx = startX.current;
-    startX.current = null;
+    const sx = startX.current; startX.current = null;
     (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
     if (sx == null) return;
-
-    const dx = e.clientX - sx;
-    const dt = e.timeStamp - startT.current;
+    const dx = e.clientX - sx; const dt = e.timeStamp - startT.current;
     const isTap = Math.abs(dx) < 10 && dt < 300;
-
-    if (isTap) { setFlip(f => !f); resetCard(); return; }
+    if (isTap) { setFlip(f => !f); resetCardTransform(); return; }
     if (dx > 120) { decide("like"); return; }
     if (dx < -120) { decide("dislike"); return; }
-    resetCard();
-  }, [decide, resetCard]);
+    resetCardTransform();
+  }, [decide, resetCardTransform]);
 
-  const current = feed[idx];
-  const details = isRec(current) ? detailsMap[`${current.mediaType}:${current.tmdbId}`] : undefined;
+  const cur = feed[i];
+  if (err) return <div className="p-6 text-red-500">{err}</div>;
+  if (!cur) return <div className="p-6">Slut på förslag för nu.</div>;
 
-  if (!code) {
-    return (
-      <main className="p-6 max-w-xl mx-auto">
-        <h1 className="text-2xl font-semibold mb-2">Grupp-swipe</h1>
-        <p className="opacity-80">Saknar <code>?code=XXXXXX</code> i URL:en.</p>
-      </main>
-    );
-  }
+  const dKey = isRec(cur) ? `${cur.mediaType}:${cur.tmdbId}` : "";
+  const det = isRec(cur) ? detailsMap[dKey] : undefined;
 
   return (
-    <main className="p-6 max-w-xl mx-auto">
-      <h1 className="text-2xl font-semibold mb-1">Grupp-swipe</h1>
-      <p className="opacity-80 mb-4">Kod: <span className="font-mono">{code}</span></p>
+    <div className="max-w-xl mx-auto p-6">
+      <h1 className="text-2xl font-bold mb-4">Dina förslag</h1>
 
-      {matchFound && (
-        <div className="mb-4 rounded-lg border border-green-600 p-3">
-          <strong>{matchFound}</strong>
-          <div className="text-sm opacity-80">Öppna matchlistan: <code>/group/match?code={code}</code></div>
+      {cur.type === "ad" ? (
+        <div className="border rounded-xl p-5 mb-4">
+          <div className="text-xs opacity-60 mb-1">Annons</div>
+          <div className="font-semibold">{cur.headline}</div>
+          <div className="text-sm opacity-80">{cur.body}</div>
+          <a className="underline text-sm" href={cur.href}>{cur.cta}</a>
+          <div className="mt-4"><button className="border rounded px-3 py-1 mr-2" onClick={() => setI(v => v + 1)}>Fortsätt</button></div>
         </div>
-      )}
-
-      {loading && <p>Laddar förslag…</p>}
-
-      {!loading && current && (
+      ) : (
         <>
+          {/* Flip: front = poster (med overlay), back = info */}
           <div
             className="[perspective:1000px] select-none cursor-grab active:cursor-grabbing"
             style={{ touchAction: "pan-y" }}
@@ -199,72 +227,70 @@ function GroupSwipeInner() {
             onPointerCancel={onPointerEnd}
           >
             <div
-              ref={cardRef}
+              ref={cardWrapRef}
               className="relative w-full overflow-hidden rounded-xl border shadow"
               style={{ aspectRatio: "2 / 3" }}
             >
               <div className={`absolute inset-0 transition-transform duration-300 [transform-style:preserve-3d] ${flip ? "[transform:rotateY(180deg)]" : ""}`}>
-                {/* FRONT: poster */}
+                {/* FRONT */}
                 <div className="absolute inset-0 [backface-visibility:hidden]">
-                  {details?.posterPath ? (
-                    <Image
-                      src={`https://image.tmdb.org/t/p/w780${details.posterPath}`}
-                      alt={details.title}
-                      fill
-                      sizes="(min-width: 768px) 640px, 100vw"
-                      className="object-cover"
-                      priority={idx === 0}
-                    />
+                  {det?.posterPath ? (
+                    <>
+                      <Image
+                        src={`https://image.tmdb.org/t/p/w780${det.posterPath}`}
+                        alt={det.title}
+                        fill
+                        sizes="(min-width: 768px) 640px, 100vw"
+                        className="object-cover"
+                        priority={i === 0}
+                      />
+                      {/* FRONT OVERLAY: titel + år + betyg */}
+                      <div className="absolute inset-x-0 bottom-0 p-3 bg-gradient-to-t from-black/70 via-black/20 to-transparent text-white">
+                        <div className="flex items-end justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="text-base font-semibold truncate">{det.title}</div>
+                            <div className="text-xs opacity-90">{det.year ?? "—"}</div>
+                          </div>
+                          <div className="text-sm shrink-0">
+                            <span aria-label="TMDb rating">★ {formatRating(det.voteAverage)}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </>
                   ) : (
                     <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.06)_25%,rgba(255,255,255,0.12)_37%,rgba(255,255,255,0.06)_63%)] bg-[length:400%_100%] animate-[shimmer_1.2s_infinite] rounded-xl" />
                   )}
                 </div>
+
                 {/* BACK: info */}
                 <div className="absolute inset-0 p-4 [backface-visibility:hidden] [transform:rotateY(180deg)] bg-black/55 text-white">
-                  {isRec(current) && (
-                    <>
-                      <div className="text-lg font-semibold mb-1">
-                        {details?.title || current.title} {details?.year ? <span className="text-xs opacity-70">[{details.year}]</span> : null}
-                      </div>
-                      <div className="text-sm opacity-80 mb-2">
-                        Providers: {current.matchedProviders.join(", ") || (current.unknown ? "okänt" : "—")}
-                      </div>
-                      <p className="text-sm opacity-90">{details ? details.overview || "Ingen beskrivning." : "Laddar info…"}</p>
-                    </>
-                  )}
+                  <div className="text-lg font-semibold mb-1">
+                    {det?.title || cur.title} {det?.year ? <span className="text-xs opacity-70">[{det.year}]</span> : null}
+                  </div>
+                  <div className="text-sm opacity-80 mb-2">
+                    Providers: {cur.matchedProviders.join(", ") || (cur.unknown ? "Okänd" : "—")}
+                  </div>
+                  <p className="text-sm opacity-90">{det ? det.overview || "Ingen beskrivning." : "Laddar info…"}</p>
                 </div>
               </div>
             </div>
           </div>
 
           {/* Knappar */}
-          <div className="mt-3 flex gap-2 justify-center">
-            <button className="px-4 py-2 rounded-xl border" onClick={() => decide("dislike")}>Nej (←)</button>
-            <button className="px-4 py-2 rounded-xl border" onClick={() => setFlip(f => !f)}>Info</button>
-            <button className="px-4 py-2 rounded-xl border" onClick={() => decide("like")}>Ja (→)</button>
-            <button className="px-4 py-2 rounded-xl border" onClick={toggleWatch}>Watchlist (↑)</button>
+          <div className="mt-3 flex justify-center gap-3">
+            <button className="border rounded px-4 py-2" onClick={() => decide("dislike")}>Nej ←</button>
+            <button className="border rounded px-4 py-2" onClick={() => setFlip(f => !f)}>Info</button>
+            <button className="border rounded px-4 py-2" onClick={() => decide("like")}>Ja →</button>
+            <button className="border rounded px-4 py-2" onClick={toggleWatch}>+ Watchlist ↑</button>
           </div>
         </>
       )}
 
-      {!loading && !current && (
-        <div className="rounded-lg border p-4">
-          <p className="mb-2">Slut på förslag nu.</p>
-          <a className="underline" href={`/group/match?code=${encodeURIComponent(code)}`}>Visa matchlista</a>
-        </div>
-      )}
+      <div className="mt-4 text-sm opacity-70">
+        Tips: Tryck/tap på kortet för att vända. ←/→ Nej/Ja, ↑ Watchlist, Space vänd.
+      </div>
 
-      <style jsx>{`
-        @keyframes shimmer { 0% { background-position: 100% 0; } 100% { background-position: 0 0; } }
-      `}</style>
-    </main>
-  );
-}
-
-export default function GroupSwipePage() {
-  return (
-    <Suspense fallback={<main className="p-6 max-w-xl mx-auto">Laddar…</main>}>
-      <GroupSwipeInner />
-    </Suspense>
+      <style jsx>{`@keyframes shimmer { 0% { background-position: 100% 0 } 100% { background-position: 0 0 } }`}</style>
+    </div>
   );
 }

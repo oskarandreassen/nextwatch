@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { prisma } from "../../../../lib/prisma"; // ✅ rätt nivå
+import { prisma } from "../../../../lib/prisma";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -14,6 +14,8 @@ type MovieDetails = {
   overview: string;
   poster_path: string | null;
   release_date?: string | null;
+  vote_average?: number;
+  vote_count?: number;
 };
 type TvDetails = {
   id: number;
@@ -21,6 +23,8 @@ type TvDetails = {
   overview: string;
   poster_path: string | null;
   first_air_date?: string | null;
+  vote_average?: number;
+  vote_count?: number;
 };
 type NormalizedDetails = {
   ok: true;
@@ -28,11 +32,11 @@ type NormalizedDetails = {
   mediaType: "movie" | "tv";
   title: string;
   overview: string;
-  /** behålls för bakåtkompabilitet (w500) */
   posterUrl: string | null;
-  /** NYTT: rå TMDb-path så klienten kan be om w780/original */
   posterPath: string | null;
   year: string | null;
+  voteAverage: number | null;
+  voteCount: number | null;
 };
 
 function posterUrl(path: string | null | undefined): string | null {
@@ -79,8 +83,10 @@ export async function GET(req: Request) {
         title: d.title,
         overview: d.overview || "",
         posterUrl: posterUrl(d.poster_path),
-        posterPath: d.poster_path ?? null, // ✅
+        posterPath: d.poster_path ?? null,
         year: yearFromDate(d.release_date ?? null),
+        voteAverage: typeof d.vote_average === "number" ? d.vote_average : null,
+        voteCount: typeof d.vote_count === "number" ? d.vote_count : null,
       };
       return NextResponse.json(res);
     } else {
@@ -92,8 +98,10 @@ export async function GET(req: Request) {
         title: d.name,
         overview: d.overview || "",
         posterUrl: posterUrl(d.poster_path),
-        posterPath: d.poster_path ?? null, // ✅
+        posterPath: d.poster_path ?? null,
         year: yearFromDate(d.first_air_date ?? null),
+        voteAverage: typeof d.vote_average === "number" ? d.vote_average : null,
+        voteCount: typeof d.vote_count === "number" ? d.vote_count : null,
       };
       return NextResponse.json(res);
     }
