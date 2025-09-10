@@ -3,9 +3,9 @@
 import React, { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Image from "next/image";
-import AppShell from "../../components/layouts/AppShell";
-import ActionDock from "../../components/ui/ActionDock";
-import InfoPanel from "../../components/panels/InfoPanel";
+import AppShell from "../components/layouts/AppShell";
+import ActionDock from "../components/ui/ActionDock";
+import InfoPanel from "../components/panels/InfoPanel";
 
 export const dynamic = "force-dynamic";
 
