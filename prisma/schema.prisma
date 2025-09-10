@@ -80,3 +80,25 @@ model Purchase {
   @@index([userId, createdAt], map: "idx_purchases_user")
   @@map("purchases")
 }
+
+model Group {
+  code       String   @id
+  createdBy  String   @map("created_by")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  members    GroupMember[]
+
+  @@map("groups")
+}
+
+model GroupMember {
+  groupCode  String   @map("group_code")
+  userId     String   @map("user_id")
+  joinedAt   DateTime @default(now()) @map("joined_at")
+
+  group      Group    @relation(fields: [groupCode], references: [code], onDelete: Cascade)
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([groupCode, userId])
+  @@map("group_members")
+}
