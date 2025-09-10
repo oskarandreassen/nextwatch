@@ -35,8 +35,8 @@ type Details = {
   mediaType: "movie" | "tv";
   title: string;
   overview: string;
-  posterUrl: string | null;   // back-compat (w500)
-  posterPath: string | null;  // används för w780 (skarpare)
+  posterUrl: string | null;
+  posterPath: string | null;
   year: string | null;
 };
 type ApiDetailsOk = Details & { ok: true };
@@ -55,10 +55,9 @@ function SwipeInner() {
   const [flip, setFlip] = useState(false);
   const [err, setErr] = useState("");
 
-  // detaljer-cache
   const [detailsMap, setDetailsMap] = useState<Record<string, Details>>({});
 
-  // Refs → stabila callbacks utan deps-varningar
+  // refs för stabila handlers
   const feedRef = useRef<FeedItem[]>([]);
   const indexRef = useRef(0);
   const detailsRef = useRef<Record<string, Details>>({});
@@ -67,7 +66,7 @@ function SwipeInner() {
   useEffect(() => { indexRef.current = i; }, [i]);
   useEffect(() => { detailsRef.current = detailsMap; }, [detailsMap]);
 
-  // Hämta feed
+  // ladda feed
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -81,9 +80,7 @@ function SwipeInner() {
           setI(0);
           setFlip(false);
           setErr("");
-        } else {
-          setErr(js?.error || "Fel");
-        }
+        } else setErr(js?.error || "Fel");
       } catch (e) {
         if (!cancelled) setErr(String(e));
       }
@@ -91,12 +88,12 @@ function SwipeInner() {
     return () => { cancelled = true; };
   }, [media]);
 
-  // Helper: hämta details strikt typat
-  const fetchDetails = useCallback(async (type: "movie" | "tv", id: number) => {
+  // hämta detaljer (valbar cache-policy)
+  const fetchDetails = useCallback(async (type: "movie" | "tv", id: number, cache: RequestCache) => {
     const key = `${type}:${id}`;
-    if (detailsRef.current[key]) return; // redan cache:ad
+    if (detailsRef.current[key]) return;
     try {
-      const r = await fetch(`/api/tmdb/details?type=${type}&id=${id}`, { cache: "force-cache" });
+      const r = await fetch(`/api/tmdb/details?type=${type}&id=${id}`, { cache });
       const js = (await r.json()) as ApiDetailsOk | ApiDetailsErr;
       if (!js.ok) return;
       setDetailsMap(prev => ({
@@ -114,15 +111,30 @@ function SwipeInner() {
     } catch { /* ignore */ }
   }, []);
 
-  // Prefetch AV BÅDE AKTUELL OCH NÄSTA: fixar “första kortet saknar poster”
+  // Prefetch: aktuell (no-store om första) + nästa (force-cache)
   useEffect(() => {
     const cur = feed[i];
-    if (isRec(cur)) fetchDetails(cur.mediaType, cur.tmdbId);
+    if (isRec(cur)) fetchDetails(cur.mediaType, cur.tmdbId, i === 0 ? "no-store" : "force-cache");
     const nxt = feed[i + 1];
-    if (isRec(nxt)) fetchDetails(nxt.mediaType, nxt.tmdbId);
+    if (isRec(nxt)) fetchDetails(nxt.mediaType, nxt.tmdbId, "force-cache");
   }, [feed, i, fetchDetails]);
 
+  // drag/tap state
+  const cardWrapRef = useRef<HTMLDivElement | null>(null);
+  const startX = useRef<number | null>(null);
+  const startT = useRef<number>(0);
+
+  const resetCardTransform = useCallback(() => {
+    if (cardWrapRef.current) {
+      cardWrapRef.current.style.transition = "transform 180ms ease-out";
+      cardWrapRef.current.style.transform = "";
+    }
+  }, []);
+
   const decide = useCallback(async (kind: "like" | "dislike" | "skip" | "seen") => {
+    // nollställ position direkt så nästa kort börjar rakt
+    resetCardTransform();
+
     const idx = indexRef.current;
     const item = feedRef.current[idx];
     if (!item || item.type === "ad") {
@@ -141,7 +153,7 @@ function SwipeInner() {
       setI(v => v + 1);
       setFlip(false);
     }
-  }, []);
+  }, [resetCardTransform]);
 
   const toggleWatch = useCallback(async () => {
     const idx = indexRef.current;
@@ -156,7 +168,7 @@ function SwipeInner() {
     } catch { /* ignore */ }
   }, []);
 
-  // Tangentbord
+  // tangentbord
   const handleKey = useCallback((e: KeyboardEvent) => {
     const idx = indexRef.current;
     const item = feedRef.current[idx];
@@ -178,14 +190,10 @@ function SwipeInner() {
     return () => window.removeEventListener("keydown", handleKey);
   }, [handleKey]);
 
-  const cur = feed[i];
-
-  // ---- Drag/Swipe förbättrat för mobil ----
-  const cardWrapRef = useRef<HTMLDivElement | null>(null);
-  const startX = useRef<number | null>(null);
-
+  // pointer
   const onPointerDown = useCallback((e: React.PointerEvent) => {
     startX.current = e.clientX;
+    startT.current = e.timeStamp;
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
     if (cardWrapRef.current) cardWrapRef.current.style.transition = "transform 0s";
   }, []);
@@ -194,23 +202,23 @@ function SwipeInner() {
     const dx = e.clientX - startX.current;
     cardWrapRef.current.style.transform = `translateX(${dx}px) rotate(${dx / 20}deg)`;
   }, []);
-  const resetCardTransform = useCallback(() => {
-    if (cardWrapRef.current) {
-      cardWrapRef.current.style.transition = "transform 200ms ease-out";
-      cardWrapRef.current.style.transform = "";
-    }
-  }, []);
   const onPointerEnd = useCallback((e: React.PointerEvent) => {
-    if (startX.current == null) return;
-    const dx = e.clientX - startX.current;
-    (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
+    const sx = startX.current;
     startX.current = null;
+    (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
+    if (sx == null) return;
+
+    const dx = e.clientX - sx;
+    const dt = e.timeStamp - startT.current;
+    const isTap = Math.abs(dx) < 10 && dt < 300;
+
+    if (isTap) { setFlip(f => !f); resetCardTransform(); return; }
     if (dx > 120) { decide("like"); return; }
     if (dx < -120) { decide("dislike"); return; }
-    resetCardTransform(); // snäpp tillbaka
+    resetCardTransform();
   }, [decide, resetCardTransform]);
 
-  // ----------------------------------------
+  const cur = feed[i];
 
   if (err) return <div className="p-6 text-red-500">{err}</div>;
   if (!cur) return <div className="p-6">Slut på förslag för nu.</div>;
@@ -234,7 +242,7 @@ function SwipeInner() {
         </div>
       ) : (
         <>
-          {/* FLIP-CONTAINER: front = poster, back = detaljer */}
+          {/* Flip: front = poster, back = info */}
           <div
             className="[perspective:1000px] select-none cursor-grab active:cursor-grabbing"
             style={{ touchAction: "pan-y" }}
@@ -253,7 +261,7 @@ function SwipeInner() {
                   flip ? "[transform:rotateY(180deg)]" : ""
                 }`}
               >
-                {/* FRONT: poster (w780) */}
+                {/* FRONT: poster */}
                 <div className="absolute inset-0 [backface-visibility:hidden]">
                   {det?.posterPath ? (
                     <Image
@@ -262,16 +270,15 @@ function SwipeInner() {
                       fill
                       sizes="(min-width: 768px) 640px, 100vw"
                       className="object-cover"
-                      priority
+                      priority={i === 0}
                     />
                   ) : (
-                    // Skeleton tills details är hämtat
                     <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.06)_25%,rgba(255,255,255,0.12)_37%,rgba(255,255,255,0.06)_63%)] bg-[length:400%_100%] animate-[shimmer_1.2s_infinite] rounded-xl" />
                   )}
                 </div>
 
-                {/* BACK: detaljer */}
-                <div className="absolute inset-0 p-4 [backface-visibility:hidden] [transform:rotateY(180deg)] bg-black/50 text-white">
+                {/* BACK: info */}
+                <div className="absolute inset-0 p-4 [backface-visibility:hidden] [transform:rotateY(180deg)] bg-black/55 text-white">
                   <div className="text-lg font-semibold mb-1">
                     {det?.title || cur.title} {det?.year ? <span className="text-xs opacity-70">[{det.year}]</span> : null}
                   </div>
@@ -295,15 +302,11 @@ function SwipeInner() {
       )}
 
       <div className="mt-4 text-sm opacity-70">
-        Tips: ←/→ för Nej/Ja, ↑ för Watchlist, Space för att vända kortet.
+        Tips: Tap för att vända. ←/→ för Nej/Ja, ↑ för Watchlist, Space för att vända kortet.
       </div>
 
-      {/* keyframes för skeleton */}
       <style jsx>{`
-        @keyframes shimmer {
-          0% { background-position: 100% 0; }
-          100% { background-position: 0 0; }
-        }
+        @keyframes shimmer { 0% { background-position: 100% 0; } 100% { background-position: 0 0; } }
       `}</style>
     </div>
   );

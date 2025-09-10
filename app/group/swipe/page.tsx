@@ -14,14 +14,7 @@ type RecItem = {
   matchedProviders: string[];
   unknown: boolean;
 };
-type AdItem = {
-  type: "ad";
-  id: string;
-  headline: string;
-  body: string;
-  cta: string;
-  href: string;
-};
+type AdItem = { type: "ad"; id: string; headline: string; body: string; cta: string; href: string };
 type FeedItem = RecItem | AdItem;
 
 type Details = {
@@ -36,9 +29,7 @@ type Details = {
 type ApiDetailsOk = Details & { ok: true };
 type ApiDetailsErr = { ok: false; error: string };
 
-function isRec(x: FeedItem): x is RecItem {
-  return x.type === "rec";
-}
+function isRec(x: FeedItem): x is RecItem { return x.type === "rec"; }
 
 function GroupSwipeInner() {
   const sp = useSearchParams();
@@ -59,7 +50,6 @@ function GroupSwipeInner() {
   useEffect(() => { indexRef.current = idx; }, [idx]);
   useEffect(() => { detailsRef.current = detailsMap; }, [detailsMap]);
 
-  // hämta gruppens feed
   useEffect(() => {
     let ignore = false;
     async function run() {
@@ -67,50 +57,48 @@ function GroupSwipeInner() {
       setLoading(true);
       const r = await fetch(`/api/recs/group?code=${encodeURIComponent(code)}`, { cache: "no-store" });
       const j = await r.json();
-      if (!ignore) {
-        if (j?.ok) setFeed(j.feed as FeedItem[]);
-        setIdx(0);
-        setFlip(false);
-        setLoading(false);
-      }
+      if (ignore) return;
+      if (j?.ok) setFeed(j.feed as FeedItem[]);
+      setIdx(0);
+      setFlip(false);
+      setLoading(false);
     }
     run();
     return () => { ignore = true; };
   }, [code]);
 
-  // prefetch details för aktuell rec (strikt typat)
+  const fetchDetails = useCallback(async (type: "movie" | "tv", id: number, cache: RequestCache) => {
+    const key = `${type}:${id}`;
+    if (detailsRef.current[key]) return;
+    try {
+      const r = await fetch(`/api/tmdb/details?type=${type}&id=${id}`, { cache });
+      const js = (await r.json()) as ApiDetailsOk | ApiDetailsErr;
+      if (!js.ok) return;
+      setDetailsMap(prev => ({ ...prev, [`${js.mediaType}:${js.id}`]: js }));
+    } catch { /* ignore */ }
+  }, []);
+
   useEffect(() => {
     const cur = feed[idx];
-    if (!cur || !isRec(cur)) return;
-    const key = `${cur.mediaType}:${cur.tmdbId}`;
-    if (detailsRef.current[key]) return;
+    if (isRec(cur)) fetchDetails(cur.mediaType, cur.tmdbId, idx === 0 ? "no-store" : "force-cache");
+    const nxt = feed[idx + 1];
+    if (isRec(nxt)) fetchDetails(nxt.mediaType, nxt.tmdbId, "force-cache");
+  }, [feed, idx, fetchDetails]);
 
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await fetch(`/api/tmdb/details?type=${cur.mediaType}&id=${cur.tmdbId}`, { cache: "force-cache" });
-        const js = (await r.json()) as ApiDetailsOk | ApiDetailsErr;
-        if (cancelled || !js.ok) return;
-        setDetailsMap(prev => ({
-          ...prev,
-          [`${js.mediaType}:${js.id}`]: {
-            id: js.id,
-            mediaType: js.mediaType,
-            title: js.title,
-            overview: js.overview,
-            posterUrl: js.posterUrl,
-            posterPath: js.posterPath,
-            year: js.year,
-          },
-        }));
-      } catch {
-        /* ignore */
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [feed, idx]);
+  // drag/tap
+  const cardRef = useRef<HTMLDivElement | null>(null);
+  const startX = useRef<number | null>(null);
+  const startT = useRef<number>(0);
+
+  const resetCard = useCallback(() => {
+    if (cardRef.current) {
+      cardRef.current.style.transition = "transform 180ms ease-out";
+      cardRef.current.style.transform = "";
+    }
+  }, []);
 
   const decide = useCallback(async (decision: "like" | "dislike") => {
+    resetCard();
     const item = feedRef.current[indexRef.current];
     if (!item || !isRec(item)) {
       setIdx(v => v + 1);
@@ -130,12 +118,12 @@ function GroupSwipeInner() {
           setMatchFound(`Match! ${j.matches.length} träff(ar) för grupp ${code}`);
         }
       }
-    } catch { /* no-op */ }
+    } catch { /* ignore */ }
     finally {
       setIdx(v => v + 1);
       setFlip(false);
     }
-  }, [code]);
+  }, [code, resetCard]);
 
   const toggleWatch = useCallback(async () => {
     const item = feedRef.current[indexRef.current];
@@ -147,22 +135,35 @@ function GroupSwipeInner() {
     });
   }, []);
 
-  // tangentbord
-  useEffect(() => {
-    const key = (e: KeyboardEvent) => {
-      const item = feedRef.current[indexRef.current];
-      if (!item) return;
-      if (e.key === "ArrowLeft") decide("dislike");
-      else if (e.key === "ArrowRight") decide("like");
-      else if (e.key === "ArrowUp") toggleWatch();
-      else if (e.key === " ") setFlip(f => !f);
-    };
-    window.addEventListener("keydown", key);
-    return () => window.removeEventListener("keydown", key);
-  }, [decide, toggleWatch]);
+  const onPointerDown = useCallback((e: React.PointerEvent) => {
+    startX.current = e.clientX;
+    startT.current = e.timeStamp;
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    if (cardRef.current) cardRef.current.style.transition = "transform 0s";
+  }, []);
+  const onPointerMove = useCallback((e: React.PointerEvent) => {
+    if (startX.current == null || !cardRef.current) return;
+    const dx = e.clientX - startX.current;
+    cardRef.current.style.transform = `translateX(${dx}px) rotate(${dx / 20}deg)`;
+  }, []);
+  const onPointerEnd = useCallback((e: React.PointerEvent) => {
+    const sx = startX.current;
+    startX.current = null;
+    (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
+    if (sx == null) return;
+
+    const dx = e.clientX - sx;
+    const dt = e.timeStamp - startT.current;
+    const isTap = Math.abs(dx) < 10 && dt < 300;
+
+    if (isTap) { setFlip(f => !f); resetCard(); return; }
+    if (dx > 120) { decide("like"); return; }
+    if (dx < -120) { decide("dislike"); return; }
+    resetCard();
+  }, [decide, resetCard]);
 
   const current = feed[idx];
-  const remaining = Math.max(0, feed.length - idx - 1);
+  const details = isRec(current) ? detailsMap[`${current.mediaType}:${current.tmdbId}`] : undefined;
 
   if (!code) {
     return (
@@ -187,6 +188,65 @@ function GroupSwipeInner() {
 
       {loading && <p>Laddar förslag…</p>}
 
+      {!loading && current && (
+        <>
+          <div
+            className="[perspective:1000px] select-none cursor-grab active:cursor-grabbing"
+            style={{ touchAction: "pan-y" }}
+            onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
+            onPointerUp={onPointerEnd}
+            onPointerCancel={onPointerEnd}
+          >
+            <div
+              ref={cardRef}
+              className="relative w-full overflow-hidden rounded-xl border shadow"
+              style={{ aspectRatio: "2 / 3" }}
+            >
+              <div className={`absolute inset-0 transition-transform duration-300 [transform-style:preserve-3d] ${flip ? "[transform:rotateY(180deg)]" : ""}`}>
+                {/* FRONT: poster */}
+                <div className="absolute inset-0 [backface-visibility:hidden]">
+                  {details?.posterPath ? (
+                    <Image
+                      src={`https://image.tmdb.org/t/p/w780${details.posterPath}`}
+                      alt={details.title}
+                      fill
+                      sizes="(min-width: 768px) 640px, 100vw"
+                      className="object-cover"
+                      priority={idx === 0}
+                    />
+                  ) : (
+                    <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.06)_25%,rgba(255,255,255,0.12)_37%,rgba(255,255,255,0.06)_63%)] bg-[length:400%_100%] animate-[shimmer_1.2s_infinite] rounded-xl" />
+                  )}
+                </div>
+                {/* BACK: info */}
+                <div className="absolute inset-0 p-4 [backface-visibility:hidden] [transform:rotateY(180deg)] bg-black/55 text-white">
+                  {isRec(current) && (
+                    <>
+                      <div className="text-lg font-semibold mb-1">
+                        {details?.title || current.title} {details?.year ? <span className="text-xs opacity-70">[{details.year}]</span> : null}
+                      </div>
+                      <div className="text-sm opacity-80 mb-2">
+                        Providers: {current.matchedProviders.join(", ") || (current.unknown ? "okänt" : "—")}
+                      </div>
+                      <p className="text-sm opacity-90">{details ? details.overview || "Ingen beskrivning." : "Laddar info…"}</p>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Knappar */}
+          <div className="mt-3 flex gap-2 justify-center">
+            <button className="px-4 py-2 rounded-xl border" onClick={() => decide("dislike")}>Nej (←)</button>
+            <button className="px-4 py-2 rounded-xl border" onClick={() => setFlip(f => !f)}>Info</button>
+            <button className="px-4 py-2 rounded-xl border" onClick={() => decide("like")}>Ja (→)</button>
+            <button className="px-4 py-2 rounded-xl border" onClick={toggleWatch}>Watchlist (↑)</button>
+          </div>
+        </>
+      )}
+
       {!loading && !current && (
         <div className="rounded-lg border p-4">
           <p className="mb-2">Slut på förslag nu.</p>
@@ -194,113 +254,10 @@ function GroupSwipeInner() {
         </div>
       )}
 
-      {!loading && current && (
-        <div className="rounded-xl border p-4">
-          {isRec(current) ? (
-            <CardRec
-              item={current}
-              flip={flip}
-              setFlip={setFlip}
-              onLike={() => decide("like")}
-              onDislike={() => decide("dislike")}
-              onWatch={toggleWatch}
-              details={detailsMap[`${current.mediaType}:${current.tmdbId}`]}
-              remaining={remaining}
-            />
-          ) : (
-            <CardAd item={current} onNext={() => setIdx(v => v + 1)} />
-          )}
-        </div>
-      )}
+      <style jsx>{`
+        @keyframes shimmer { 0% { background-position: 100% 0; } 100% { background-position: 0 0; } }
+      `}</style>
     </main>
-  );
-}
-
-function CardAd({ item, onNext }: { item: AdItem; onNext: () => void }) {
-  return (
-    <>
-      <div className="text-lg font-medium">{item.headline}</div>
-      <div className="opacity-80 mb-3">{item.body}</div>
-      <a className="px-4 py-2 rounded-xl border hover:bg-white/5 inline-block" href={item.href}>
-        {item.cta}
-      </a>
-      <div className="mt-3">
-        <button className="text-sm underline opacity-80" onClick={onNext}>Fortsätt</button>
-      </div>
-    </>
-  );
-}
-
-function CardRec(props: {
-  item: RecItem;
-  flip: boolean;
-  setFlip: (v: boolean) => void;
-  onLike: () => void;
-  onDislike: () => void;
-  onWatch: () => void;
-  details?: Details;
-  remaining: number;
-}) {
-  const { item, flip, setFlip, onLike, onDislike, onWatch, details, remaining } = props;
-
-  return (
-    <>
-      {/* Kortcontainer: FRONT = poster (fix 2:3), BACK = detaljer */}
-      <div className="relative w-full select-none" style={{ aspectRatio: "2 / 3" }}>
-        <div
-          className={`absolute inset-0 rounded-xl border transition-transform duration-300 [transform-style:preserve-3d] ${
-            flip ? "[transform:rotateY(180deg)]" : ""
-          }`}
-        >
-          {/* FRONT: poster (w780 för skärpa) */}
-          <div className="absolute inset-0 [backface-visibility:hidden] overflow-hidden rounded-xl">
-            {details?.posterPath ? (
-              <Image
-                src={`https://image.tmdb.org/t/p/w780${details.posterPath}`}
-                alt={details.title}
-                fill
-                sizes="(min-width: 768px) 640px, 100vw"
-                className="object-cover"
-                priority
-              />
-            ) : (
-              <div className="absolute inset-0 flex items-center justify-center text-xs opacity-70">
-                Ingen poster
-              </div>
-            )}
-          </div>
-
-          {/* BACK: detaljer */}
-          <div className="absolute inset-0 p-4 [backface-visibility:hidden] [transform:rotateY(180deg)]">
-            <div className="text-lg font-medium">
-              {details?.title || item.title}{" "}
-              <span className="opacity-70 text-sm">{details?.year ? `[${details.year}]` : ""}</span>
-            </div>
-            <div className="text-sm opacity-80 mb-2">
-              Providers: {item.matchedProviders.join(", ") || (item.unknown ? "okänt" : "—")}
-            </div>
-            <p className="text-sm opacity-90">
-              {details ? details.overview || "Ingen beskrivning." : "Laddar info…"}
-            </p>
-            <div className="mt-3">
-              <button className="border rounded px-3 py-1" onClick={() => setFlip(false)}>
-                Till framsidan
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Knappar under kortet */}
-      <div className="mt-3 flex gap-2 justify-center">
-        <button className="px-4 py-2 rounded-xl border" onClick={onDislike}>Nej (←)</button>
-        <button className="px-4 py-2 rounded-xl border" onClick={() => setFlip(true)}>Info</button>
-        <button className="px-4 py-2 rounded-xl border" onClick={onLike}>Ja (→)</button>
-        <button className="px-4 py-2 rounded-xl border" onClick={onWatch}>Watchlist (↑)</button>
-      </div>
-
-      <div className="mt-3 text-sm opacity-70 text-center">Kvar i stacken: {remaining}</div>
-    </>
   );
 }
 
