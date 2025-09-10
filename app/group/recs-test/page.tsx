@@ -1,7 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
+
+export const dynamic = "force-dynamic"; // undvik SSG/prerender för denna sida
 
 type RecItem = {
   type: "rec";
@@ -21,10 +23,17 @@ type AdItem = {
 };
 type FeedItem = RecItem | AdItem;
 
-export default function GroupRecsTest() {
+export default function GroupRecsTestPage() {
+  return (
+    <Suspense fallback={<div className="p-6">Laddar…</div>}>
+      <GroupRecsTestInner />
+    </Suspense>
+  );
+}
+
+function GroupRecsTestInner() {
   const sp = useSearchParams();
   const code = sp?.get("code") || "";
-
   const [feed, setFeed] = useState<FeedItem[]>([]);
   const [err, setErr] = useState("");
 
