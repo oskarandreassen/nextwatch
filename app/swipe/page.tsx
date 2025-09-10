@@ -2,6 +2,8 @@
 
 import React, { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import Image from "next/image";
+
 
 export default function SwipePage() {
   return (
@@ -249,21 +251,24 @@ function SwipeInner() {
                 flip ? "[transform:rotateY(180deg)]" : ""
               }`}
             >
-              {/* FRONT: endast poster-bild */}
-              <div className="absolute inset-0 [backface-visibility:hidden] overflow-hidden rounded-xl">
-                {det?.posterUrl ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={det.posterUrl}
-                    alt={det.title}
-                    className="w-full h-full object-cover"
-                  />
-                ) : (
-                  <div className="w-full h-full rounded-xl border border-white/20 flex items-center justify-center text-xs opacity-70">
-                    Ingen poster
-                  </div>
-                )}
-              </div>
+            {/* FRONT: poster, fast 2:3-storlek, skarp */}
+            <div className="relative w-full overflow-hidden rounded-xl border shadow" style={{ aspectRatio: "2 / 3" }}>
+            {det?.posterPath ? (
+                <Image
+                src={`https://image.tmdb.org/t/p/w780${det.posterPath}`}
+                alt={det.title}
+                fill
+                sizes="(min-width: 768px) 640px, 100vw"
+                className="object-cover"
+                priority
+                />
+            ) : (
+                <div className="absolute inset-0 flex items-center justify-center text-xs opacity-70">
+                Ingen poster
+                </div>
+            )}
+            </div>
+
 
               {/* BACK: detaljer */}
               <div className="absolute inset-0 p-4 [backface-visibility:hidden] [transform:rotateY(180deg)]">

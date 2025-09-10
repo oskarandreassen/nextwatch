@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { prisma } from "../../../../lib/prisma";
+import { prisma } from "../../../../lib/prisma"; // ✅ rätt nivå
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -28,7 +28,10 @@ type NormalizedDetails = {
   mediaType: "movie" | "tv";
   title: string;
   overview: string;
+  /** behålls för bakåtkompabilitet (w500) */
   posterUrl: string | null;
+  /** NYTT: rå TMDb-path så klienten kan be om w780/original */
+  posterPath: string | null;
   year: string | null;
 };
 
@@ -50,7 +53,6 @@ export async function GET(req: Request) {
       return NextResponse.json({ ok: false, error: "missing or invalid type/id" }, { status: 400 });
     }
 
-    // Försök läsa språk/region från användarprofil
     const c = await cookies();
     const uid = c.get("nw_uid")?.value || null;
     let language = "sv-SE";
@@ -66,12 +68,7 @@ export async function GET(req: Request) {
       headers: H,
       next: { revalidate: 3600 },
     });
-    if (!r.ok) {
-      return NextResponse.json(
-        { ok: false, error: `tmdb ${r.status}` },
-        { status: 502 }
-      );
-    }
+    if (!r.ok) return NextResponse.json({ ok: false, error: `tmdb ${r.status}` }, { status: 502 });
 
     if (type === "movie") {
       const d = (await r.json()) as MovieDetails;
@@ -82,6 +79,7 @@ export async function GET(req: Request) {
         title: d.title,
         overview: d.overview || "",
         posterUrl: posterUrl(d.poster_path),
+        posterPath: d.poster_path ?? null, // ✅
         year: yearFromDate(d.release_date ?? null),
       };
       return NextResponse.json(res);
@@ -94,6 +92,7 @@ export async function GET(req: Request) {
         title: d.name,
         overview: d.overview || "",
         posterUrl: posterUrl(d.poster_path),
+        posterPath: d.poster_path ?? null, // ✅
         year: yearFromDate(d.first_air_date ?? null),
       };
       return NextResponse.json(res);
