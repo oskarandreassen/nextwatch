@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 
 type RecItem = {
   type: "rec";
@@ -20,20 +21,22 @@ type AdItem = {
 };
 type FeedItem = RecItem | AdItem;
 
-export default function GroupRecsTest({ searchParams }: { searchParams: { code?: string } }) {
+export default function GroupRecsTest() {
+  const sp = useSearchParams();
+  const code = sp?.get("code") || "";
+
   const [feed, setFeed] = useState<FeedItem[]>([]);
   const [err, setErr] = useState("");
-  const code =
-    (typeof window === "undefined"
-      ? searchParams?.code
-      : new URLSearchParams(window.location.search).get("code")) || "";
 
   useEffect(() => {
     if (!code) return;
     fetch(`/api/recs/group-smart?code=${encodeURIComponent(code)}&media=both&limit=30`)
-      .then(r => r.json())
-      .then(js => { if (js.ok) setFeed(js.feed as FeedItem[]); else setErr(js.error || "Fel"); })
-      .catch(e => setErr(String(e)));
+      .then((r) => r.json())
+      .then((js) => {
+        if (js.ok) setFeed(js.feed as FeedItem[]);
+        else setErr(js.error || "Fel");
+      })
+      .catch((e) => setErr(String(e)));
   }, [code]);
 
   if (!code) return <div className="p-6">Ingen kod. Gå till <a className="underline" href="/group">/group</a>.</div>;
