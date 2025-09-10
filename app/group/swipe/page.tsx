@@ -264,66 +264,70 @@ function CardRec(props: {
   remaining: number;
 }) {
   const { item, flip, setFlip, onLike, onDislike, onWatch, details, remaining } = props;
+
   return (
     <>
-      <div className="text-lg font-medium">
-        {item.title} <span className="opacity-70 text-sm">({item.mediaType})</span>
-        {details?.year ? <span className="text-xs opacity-70 ml-1">[{details.year}]</span> : null}
-      </div>
-      <div className="text-sm opacity-80 mb-4">
-        Providers: {item.matchedProviders.join(", ") || (item.unknown ? "okänt" : "—")}
-      </div>
-
-      {/* “Flip”-yta med poster + overview */}
-      <div className="relative w-full h-72 select-none [perspective:1000px]">
+      {/* Flip-yta: FRONT = poster, BACK = detaljer */}
+      <div className="relative w-full h-96 select-none [perspective:1000px]">
         <div
           className={`absolute inset-0 rounded-xl border transition-transform duration-300 [transform-style:preserve-3d] ${
             flip ? "[transform:rotateY(180deg)]" : ""
           }`}
         >
-          <div className="absolute inset-0 p-4 [backface-visibility:hidden]">
-            <div className="flex gap-2">
-              <button className="px-4 py-2 rounded-xl border" onClick={onDislike}>
-                Nej (←)
-              </button>
-              <button className="px-4 py-2 rounded-xl border" onClick={() => setFlip(true)}>
-                Info
-              </button>
-              <button className="px-4 py-2 rounded-xl border" onClick={onLike}>
-                Ja (→)
-              </button>
-              <button className="px-4 py-2 rounded-xl border" onClick={onWatch}>
-                Watchlist (↑)
-              </button>
-            </div>
-            <div className="mt-3 text-sm opacity-70">Kvar i stacken: {remaining}</div>
+          {/* FRONT: endast poster */}
+          <div className="absolute inset-0 [backface-visibility:hidden] overflow-hidden rounded-xl">
+            {details?.posterUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={details.posterUrl}
+                alt={details.title}
+                className="w-full h-full object-cover"
+              />
+            ) : (
+              <div className="w-full h-full rounded-xl border border-white/20 flex items-center justify-center text-xs opacity-70">
+                Ingen poster
+              </div>
+            )}
           </div>
 
-          <div className="absolute inset-0 p-4 grid grid-cols-3 gap-3 [backface-visibility:hidden] [transform:rotateY(180deg)]">
-            <div className="col-span-1">
-              {details?.posterUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={details.posterUrl} alt={details.title} className="w-full rounded-lg" />
-              ) : (
-                <div className="w-full h-48 rounded-lg border border-white/20 flex items-center justify-center text-xs opacity-70">
-                  Ingen poster
-                </div>
-              )}
+          {/* BACK: detaljer */}
+          <div className="absolute inset-0 p-4 [backface-visibility:hidden] [transform:rotateY(180deg)]">
+            <div className="text-lg font-medium">
+              {details?.title || item.title}{" "}
+              <span className="opacity-70 text-sm">{details?.year ? `[${details.year}]` : ""}</span>
             </div>
-            <div className="col-span-2">
-              <div className="text-lg font-semibold mb-2">{details?.title || item.title}</div>
-              <p className="text-sm opacity-80">
-                {details ? details.overview || "Ingen beskrivning." : "Laddar info…"}
-              </p>
-              <div className="mt-3">
-                <button className="border rounded px-3 py-1" onClick={() => setFlip(false)}>
-                  Tillbaka
-                </button>
-              </div>
+            <div className="text-sm opacity-80 mb-2">
+              Providers: {item.matchedProviders.join(", ") || (item.unknown ? "okänt" : "—")}
+            </div>
+            <p className="text-sm opacity-90">
+              {details ? details.overview || "Ingen beskrivning." : "Laddar info…"}
+            </p>
+            <div className="mt-3">
+              <button className="border rounded px-3 py-1" onClick={() => setFlip(false)}>
+                Till framsidan
+              </button>
             </div>
           </div>
         </div>
       </div>
+
+      {/* Knappar under kortet */}
+      <div className="mt-3 flex gap-2">
+        <button className="px-4 py-2 rounded-xl border" onClick={onDislike}>
+          Nej (←)
+        </button>
+        <button className="px-4 py-2 rounded-xl border" onClick={() => setFlip(true)}>
+          Info
+        </button>
+        <button className="px-4 py-2 rounded-xl border" onClick={onLike}>
+          Ja (→)
+        </button>
+        <button className="px-4 py-2 rounded-xl border" onClick={onWatch}>
+          Watchlist (↑)
+        </button>
+      </div>
+
+      <div className="mt-3 text-sm opacity-70">Kvar i stacken: {remaining}</div>
     </>
   );
 }

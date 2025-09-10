@@ -54,7 +54,7 @@ function SwipeInner() {
   // detaljer cache
   const [detailsMap, setDetailsMap] = useState<Record<string, Details>>({});
 
-  // Refs som speglar aktuell state → stabila callbacks utan deps-varningar
+  // Refs → stabila callbacks utan deps-varningar
   const feedRef = useRef<FeedItem[]>([]);
   const indexRef = useRef(0);
   const detailsRef = useRef<Record<string, Details>>({});
@@ -99,7 +99,7 @@ function SwipeInner() {
     const cur = feed[i];
     if (!isRec(cur)) return;
     const key = `${cur.mediaType}:${cur.tmdbId}`;
-    if (detailsRef.current[key]) return; // redan hämtat
+    if (detailsRef.current[key]) return;
 
     let cancelled = false;
     (async () => {
@@ -107,9 +107,7 @@ function SwipeInner() {
         const r = await fetch(`/api/tmdb/details?type=${cur.mediaType}&id=${cur.tmdbId}`, {
           cache: "force-cache",
         });
-        const js = (await r.json()) as
-          | (Details & { ok: true })
-          | { ok: false; error: string };
+        const js = (await r.json()) as (Details & { ok: true }) | { ok: false; error: string };
         if (cancelled || !("ok" in js) || !js.ok) return;
         setDetailsMap((prev) => ({ ...prev, [`${js.mediaType}:${js.id}`]: js }));
       } catch {
@@ -215,7 +213,6 @@ function SwipeInner() {
   if (err) return <div className="p-6 text-red-500">{err}</div>;
   if (!cur) return <div className="p-6">Slut på förslag för nu.</div>;
 
-  // details för aktuell rec
   const dKey = isRec(cur) ? `${cur.mediaType}:${cur.tmdbId}` : "";
   const det = isRec(cur) ? detailsMap[dKey] : undefined;
 
@@ -238,70 +235,73 @@ function SwipeInner() {
           </div>
         </div>
       ) : (
-        <div
-          ref={cardRef}
-          onPointerDown={onPointerDown}
-          onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
-          className="relative w-full h-96 select-none [perspective:1000px]"
-        >
-          {/* flip container */}
+        <>
+          {/* KORT – framsida = POSTER, baksida = detaljer */}
           <div
-            className={`absolute inset-0 rounded-xl shadow border bg-black/20 text-white transition-transform duration-300 [transform-style:preserve-3d] ${
-              flip ? "[transform:rotateY(180deg)]" : ""
-            }`}
+            ref={cardRef}
+            onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
+            onPointerUp={onPointerUp}
+            className="relative w-full h-96 select-none [perspective:1000px]"
           >
-            {/* front */}
-            <div className="absolute inset-0 p-4 [backface-visibility:hidden]">
-              <div className="text-lg font-semibold">
-                {cur.title}{" "}
-                <span className="text-xs opacity-60">({cur.mediaType})</span>
-                {det?.year ? <span className="text-xs opacity-70 ml-1">[{det.year}]</span> : null}
-              </div>
-              <div className="text-sm opacity-80">
-                Providers: {cur.matchedProviders.join(", ") || (cur.unknown ? "Okänd" : "—")}
-              </div>
-              <div className="absolute bottom-4 left-0 right-0 flex justify-center gap-3">
-                <button className="border rounded px-4 py-2" onClick={() => decide("dislike")}>
-                  Nej ←
-                </button>
-                <button className="border rounded px-4 py-2" onClick={() => setFlip((f) => !f)}>
-                  Info
-                </button>
-                <button className="border rounded px-4 py-2" onClick={() => decide("like")}>
-                  Ja →
-                </button>
-                <button className="border rounded px-4 py-2" onClick={toggleWatch}>
-                  + Watchlist ↑
-                </button>
-              </div>
-            </div>
-            {/* back */}
-            <div className="absolute inset-0 p-4 grid grid-cols-3 gap-3 [backface-visibility:hidden] [transform:rotateY(180deg)]">
-              <div className="col-span-1">
+            <div
+              className={`absolute inset-0 rounded-xl shadow border transition-transform duration-300 [transform-style:preserve-3d] ${
+                flip ? "[transform:rotateY(180deg)]" : ""
+              }`}
+            >
+              {/* FRONT: endast poster-bild */}
+              <div className="absolute inset-0 [backface-visibility:hidden] overflow-hidden rounded-xl">
                 {det?.posterUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img src={det.posterUrl} alt={det.title} className="w-full rounded-lg" />
+                  <img
+                    src={det.posterUrl}
+                    alt={det.title}
+                    className="w-full h-full object-cover"
+                  />
                 ) : (
-                  <div className="w-full h-48 rounded-lg border border-white/20 flex items-center justify-center text-xs opacity-70">
+                  <div className="w-full h-full rounded-xl border border-white/20 flex items-center justify-center text-xs opacity-70">
                     Ingen poster
                   </div>
                 )}
               </div>
-              <div className="col-span-2">
-                <div className="text-lg font-semibold mb-2">{det?.title || cur.title}</div>
-                <p className="text-sm opacity-80">
+
+              {/* BACK: detaljer */}
+              <div className="absolute inset-0 p-4 [backface-visibility:hidden] [transform:rotateY(180deg)]">
+                <div className="text-lg font-semibold mb-1">
+                  {det?.title || cur.title}{" "}
+                  <span className="text-xs opacity-70">{det?.year ? `[${det.year}]` : ""}</span>
+                </div>
+                <div className="text-sm opacity-80 mb-2">
+                  Providers: {cur.matchedProviders.join(", ") || (cur.unknown ? "Okänd" : "—")}
+                </div>
+                <p className="text-sm opacity-90">
                   {det ? det.overview || "Ingen beskrivning." : "Laddar info…"}
                 </p>
                 <div className="mt-3">
                   <button className="border rounded px-3 py-1" onClick={() => setFlip(false)}>
-                    Tillbaka
+                    Till framsidan
                   </button>
                 </div>
               </div>
             </div>
           </div>
-        </div>
+
+          {/* Knappar under kortet (gäller oavsett sida) */}
+          <div className="mt-3 flex justify-center gap-3">
+            <button className="border rounded px-4 py-2" onClick={() => decide("dislike")}>
+              Nej ←
+            </button>
+            <button className="border rounded px-4 py-2" onClick={() => setFlip((f) => !f)}>
+              Info
+            </button>
+            <button className="border rounded px-4 py-2" onClick={() => decide("like")}>
+              Ja →
+            </button>
+            <button className="border rounded px-4 py-2" onClick={toggleWatch}>
+              + Watchlist ↑
+            </button>
+          </div>
+        </>
       )}
 
       <div className="mt-4 text-sm opacity-70">
