@@ -4,18 +4,22 @@ import { useState } from "react";
 
 export default function PremiumPage() {
   const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState("");
+  const [err, setErr] = useState<string>("");
 
   async function buy() {
     setErr("");
     setLoading(true);
     try {
       const r = await fetch("/api/stripe/checkout", { method: "POST" });
-      const js = await r.json();
-      if (js.ok && js.url) window.location.href = js.url as string;
-      else setErr(js.error || "Kunde inte starta betalning");
-    } catch (e: any) {
-      setErr(String(e));
+      const js: { ok: boolean; url?: string; error?: string } = await r.json();
+      if (js.ok && js.url) {
+        window.location.href = js.url;
+      } else {
+        setErr(js.error ?? "Kunde inte starta betalning");
+      }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setErr(msg);
     } finally {
       setLoading(false);
     }
