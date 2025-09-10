@@ -1,5 +1,5 @@
 "use client";
-import React, { Suspense, useCallback, useEffect, useState } from "react";
+import React, { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 
 export const dynamic = "force-dynamic";
@@ -22,6 +22,15 @@ type AdItem = {
 };
 type FeedItem = RecItem | AdItem;
 
+type Details = {
+  id: number;
+  mediaType: "movie" | "tv";
+  title: string;
+  overview: string;
+  posterUrl: string | null;
+  year: string | null;
+};
+
 function isRec(x: FeedItem): x is RecItem {
   return x.type === "rec";
 }
@@ -33,8 +42,23 @@ function GroupSwipeInner() {
   const [loading, setLoading] = useState(true);
   const [feed, setFeed] = useState<FeedItem[]>([]);
   const [idx, setIdx] = useState(0);
+  const [flip, setFlip] = useState(false);
   const [matchFound, setMatchFound] = useState<string | null>(null);
-  const current = feed[idx];
+
+  const feedRef = useRef<FeedItem[]>([]);
+  const indexRef = useRef(0);
+  const [detailsMap, setDetailsMap] = useState<Record<string, Details>>({});
+  const detailsRef = useRef<Record<string, Details>>({});
+
+  useEffect(() => {
+    feedRef.current = feed;
+  }, [feed]);
+  useEffect(() => {
+    indexRef.current = idx;
+  }, [idx]);
+  useEffect(() => {
+    detailsRef.current = detailsMap;
+  }, [detailsMap]);
 
   // Hämta gruppens feed
   useEffect(() => {
@@ -49,6 +73,7 @@ function GroupSwipeInner() {
       if (!ignore) {
         if (j?.ok) setFeed(j.feed as FeedItem[]);
         setIdx(0);
+        setFlip(false);
         setLoading(false);
       }
     }
@@ -58,12 +83,39 @@ function GroupSwipeInner() {
     };
   }, [code]);
 
+  // Prefetcha detaljer för aktuell rec
+  useEffect(() => {
+    const cur = feed[idx];
+    if (!cur || !isRec(cur)) return;
+    const key = `${cur.mediaType}:${cur.tmdbId}`;
+    if (detailsRef.current[key]) return;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`/api/tmdb/details?type=${cur.mediaType}&id=${cur.tmdbId}`, {
+          cache: "force-cache",
+        });
+        const js = (await r.json()) as
+          | (Details & { ok: true })
+          | { ok: false; error: string };
+        if (cancelled || !("ok" in js) || !js.ok) return;
+        setDetailsMap((prev) => ({ ...prev, [`${js.mediaType}:${js.id}`]: js }));
+      } catch {
+        // ignore
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [feed, idx]);
+
   const decide = useCallback(
     async (decision: "like" | "dislike") => {
-      const item = feed[idx];
+      const item = feedRef.current[indexRef.current];
       if (!item || !isRec(item)) {
-        // hoppa över ads eller slut
         setIdx((v) => v + 1);
+        setFlip(false);
         return;
       }
       try {
@@ -74,10 +126,9 @@ function GroupSwipeInner() {
             tmdbId: item.tmdbId,
             mediaType: item.mediaType,
             decision,
-            groupCode: code, // ev. telemetry framåt
+            groupCode: code,
           }),
         });
-
         // Efter varje like: kolla match snabbt
         if (decision === "like") {
           const m = await fetch(`/api/group/match?code=${encodeURIComponent(code)}`, {
@@ -92,36 +143,37 @@ function GroupSwipeInner() {
         // no-op
       } finally {
         setIdx((v) => v + 1);
+        setFlip(false);
       }
     },
-    [feed, idx, code]
+    [code]
   );
 
   const toggleWatch = useCallback(async () => {
-    const item = feed[idx];
-    if (!item || !isRec(item)) {
-      setIdx((v) => v + 1);
-      return;
-    }
+    const item = feedRef.current[indexRef.current];
+    if (!item || !isRec(item)) return;
     await fetch("/api/watchlist/toggle", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ tmdbId: item.tmdbId, mediaType: item.mediaType }),
     });
-    setIdx((v) => v + 1);
-  }, [feed, idx]);
+  }, []);
 
-  // Tangentbord: ← dislike, → like, ↑ watchlist
+  // Tangentbord
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
+      const item = feedRef.current[indexRef.current];
+      if (!item) return;
       if (e.key === "ArrowLeft") decide("dislike");
       else if (e.key === "ArrowRight") decide("like");
       else if (e.key === "ArrowUp") toggleWatch();
+      else if (e.key === " ") setFlip((f) => !f);
     };
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
   }, [decide, toggleWatch]);
 
+  const current = feed[idx];
   const remaining = Math.max(0, feed.length - idx - 1);
 
   if (!code) {
@@ -165,66 +217,114 @@ function GroupSwipeInner() {
       {!loading && current && (
         <div className="rounded-xl border p-4">
           {isRec(current) ? (
-            <>
-              <div className="text-lg font-medium">
-                {current.title}{" "}
-                <span className="opacity-70 text-sm">({current.mediaType})</span>
-              </div>
-              <div className="text-sm opacity-80 mb-4">
-                Providers:{" "}
-                {current.matchedProviders.join(", ") ||
-                  (current.unknown ? "okänt" : "—")}
-              </div>
-
-              <div className="flex gap-2">
-                <button
-                  className="px-4 py-2 rounded-xl border hover:bg-white/5"
-                  onClick={() => decide("dislike")}
-                  aria-label="Dislike (vänster pil)"
-                >
-                  Nej (←)
-                </button>
-                <button
-                  className="px-4 py-2 rounded-xl border hover:bg-white/5"
-                  onClick={() => toggleWatch()}
-                  aria-label="Lägg till i watchlist (upp pil)"
-                >
-                  Watchlist (↑)
-                </button>
-                <button
-                  className="px-4 py-2 rounded-xl border hover:bg-white/5"
-                  onClick={() => decide("like")}
-                  aria-label="Like (höger pil)"
-                >
-                  Ja (→)
-                </button>
-              </div>
-
-              <div className="mt-3 text-sm opacity-70">Kvar i stacken: {remaining}</div>
-            </>
+            <CardRec
+              item={current}
+              flip={flip}
+              setFlip={setFlip}
+              onLike={() => decide("like")}
+              onDislike={() => decide("dislike")}
+              onWatch={toggleWatch}
+              details={detailsMap[`${current.mediaType}:${current.tmdbId}`]}
+              remaining={remaining}
+            />
           ) : (
-            <>
-              <div className="text-lg font-medium">{current.headline}</div>
-              <div className="opacity-80 mb-3">{current.body}</div>
-              <a
-                className="px-4 py-2 rounded-xl border hover:bg-white/5 inline-block"
-                href={current.href}
-              >
-                {current.cta}
-              </a>
-              <div className="mt-3">
-                <button
-                  className="text-sm underline opacity-80"
-                  onClick={() => setIdx((v) => v + 1)}
-                >
-                  Fortsätt
-                </button>
-              </div>
-            </>
+            <CardAd item={current} onNext={() => setIdx((v) => v + 1)} />
           )}
         </div>
       )}
     </main>
+  );
+}
+
+function CardAd({ item, onNext }: { item: AdItem; onNext: () => void }) {
+  return (
+    <>
+      <div className="text-lg font-medium">{item.headline}</div>
+      <div className="opacity-80 mb-3">{item.body}</div>
+      <a className="px-4 py-2 rounded-xl border hover:bg-white/5 inline-block" href={item.href}>
+        {item.cta}
+      </a>
+      <div className="mt-3">
+        <button className="text-sm underline opacity-80" onClick={onNext}>
+          Fortsätt
+        </button>
+      </div>
+    </>
+  );
+}
+
+function CardRec(props: {
+  item: RecItem;
+  flip: boolean;
+  setFlip: (v: boolean) => void;
+  onLike: () => void;
+  onDislike: () => void;
+  onWatch: () => void;
+  details?: Details;
+  remaining: number;
+}) {
+  const { item, flip, setFlip, onLike, onDislike, onWatch, details, remaining } = props;
+  return (
+    <>
+      <div className="text-lg font-medium">
+        {item.title} <span className="opacity-70 text-sm">({item.mediaType})</span>
+        {details?.year ? <span className="text-xs opacity-70 ml-1">[{details.year}]</span> : null}
+      </div>
+      <div className="text-sm opacity-80 mb-4">
+        Providers: {item.matchedProviders.join(", ") || (item.unknown ? "okänt" : "—")}
+      </div>
+
+      {/* “Flip”-yta med poster + overview */}
+      <div className="relative w-full h-72 select-none [perspective:1000px]">
+        <div
+          className={`absolute inset-0 rounded-xl border transition-transform duration-300 [transform-style:preserve-3d] ${
+            flip ? "[transform:rotateY(180deg)]" : ""
+          }`}
+        >
+          <div className="absolute inset-0 p-4 [backface-visibility:hidden]">
+            <div className="flex gap-2">
+              <button className="px-4 py-2 rounded-xl border" onClick={onDislike}>
+                Nej (←)
+              </button>
+              <button className="px-4 py-2 rounded-xl border" onClick={() => setFlip(true)}>
+                Info
+              </button>
+              <button className="px-4 py-2 rounded-xl border" onClick={onLike}>
+                Ja (→)
+              </button>
+              <button className="px-4 py-2 rounded-xl border" onClick={onWatch}>
+                Watchlist (↑)
+              </button>
+            </div>
+            <div className="mt-3 text-sm opacity-70">Kvar i stacken: {remaining}</div>
+          </div>
+
+          <div className="absolute inset-0 p-4 grid grid-cols-3 gap-3 [backface-visibility:hidden] [transform:rotateY(180deg)]">
+            <div className="col-span-1">
+              {details?.posterUrl ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={details.posterUrl} alt={details.title} className="w-full rounded-lg" />
+              ) : (
+                <div className="w-full h-48 rounded-lg border border-white/20 flex items-center justify-center text-xs opacity-70">
+                  Ingen poster
+                </div>
+              )}
+            </div>
+            <div className="col-span-2">
+              <div className="text-lg font-semibold mb-2">{details?.title || item.title}</div>
+              <p className="text-sm opacity-80">
+                {details ? details.overview || "Ingen beskrivning." : "Laddar info…"}
+              </p>
+              <div className="mt-3">
+                <button className="border rounded px-3 py-1" onClick={() => setFlip(false)}>
+                  Tillbaka
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </>
   );
 }
 

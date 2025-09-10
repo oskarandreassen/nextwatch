@@ -29,6 +29,15 @@ type AdItem = {
 };
 type FeedItem = RecItem | AdItem;
 
+type Details = {
+  id: number;
+  mediaType: "movie" | "tv";
+  title: string;
+  overview: string;
+  posterUrl: string | null;
+  year: string | null;
+};
+
 function isRec(x: FeedItem | undefined): x is RecItem {
   return !!x && x.type === "rec";
 }
@@ -42,9 +51,13 @@ function SwipeInner() {
   const [flip, setFlip] = useState(false);
   const [err, setErr] = useState("");
 
-  // Refs som speglar aktuell state → stabila callbacks utan deps
+  // detaljer cache
+  const [detailsMap, setDetailsMap] = useState<Record<string, Details>>({});
+
+  // Refs som speglar aktuell state → stabila callbacks utan deps-varningar
   const feedRef = useRef<FeedItem[]>([]);
   const indexRef = useRef(0);
+  const detailsRef = useRef<Record<string, Details>>({});
 
   useEffect(() => {
     feedRef.current = feed;
@@ -52,6 +65,9 @@ function SwipeInner() {
   useEffect(() => {
     indexRef.current = i;
   }, [i]);
+  useEffect(() => {
+    detailsRef.current = detailsMap;
+  }, [detailsMap]);
 
   // Hämta feed
   useEffect(() => {
@@ -77,6 +93,33 @@ function SwipeInner() {
       cancelled = true;
     };
   }, [media]);
+
+  // Prefetcha detaljer för aktuell rec
+  useEffect(() => {
+    const cur = feed[i];
+    if (!isRec(cur)) return;
+    const key = `${cur.mediaType}:${cur.tmdbId}`;
+    if (detailsRef.current[key]) return; // redan hämtat
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`/api/tmdb/details?type=${cur.mediaType}&id=${cur.tmdbId}`, {
+          cache: "force-cache",
+        });
+        const js = (await r.json()) as
+          | (Details & { ok: true })
+          | { ok: false; error: string };
+        if (cancelled || !("ok" in js) || !js.ok) return;
+        setDetailsMap((prev) => ({ ...prev, [`${js.mediaType}:${js.id}`]: js }));
+      } catch {
+        // ignore
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [feed, i]);
 
   const decide = useCallback(async (kind: "like" | "dislike" | "skip" | "seen") => {
     const idx = indexRef.current;
@@ -115,14 +158,13 @@ function SwipeInner() {
     }
   }, []);
 
-  // Tangentbord: stabil handler utan deps (använder refs + stabila callbacks)
+  // Tangentbord
   const handleKey = useCallback(
     (e: KeyboardEvent) => {
       const idx = indexRef.current;
       const item = feedRef.current[idx];
       if (!item || item.type === "ad") {
         if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
-          // hoppa vidare även om det är ad
           setI((v) => v + 1);
           setFlip(false);
         }
@@ -173,6 +215,10 @@ function SwipeInner() {
   if (err) return <div className="p-6 text-red-500">{err}</div>;
   if (!cur) return <div className="p-6">Slut på förslag för nu.</div>;
 
+  // details för aktuell rec
+  const dKey = isRec(cur) ? `${cur.mediaType}:${cur.tmdbId}` : "";
+  const det = isRec(cur) ? detailsMap[dKey] : undefined;
+
   return (
     <div className="max-w-xl mx-auto p-6">
       <h1 className="text-2xl font-bold mb-4">Dina förslag</h1>
@@ -197,7 +243,7 @@ function SwipeInner() {
           onPointerDown={onPointerDown}
           onPointerMove={onPointerMove}
           onPointerUp={onPointerUp}
-          className="relative w-full h-72 select-none [perspective:1000px]"
+          className="relative w-full h-96 select-none [perspective:1000px]"
         >
           {/* flip container */}
           <div
@@ -208,7 +254,9 @@ function SwipeInner() {
             {/* front */}
             <div className="absolute inset-0 p-4 [backface-visibility:hidden]">
               <div className="text-lg font-semibold">
-                {cur.title} <span className="text-xs opacity-60">({cur.mediaType})</span>
+                {cur.title}{" "}
+                <span className="text-xs opacity-60">({cur.mediaType})</span>
+                {det?.year ? <span className="text-xs opacity-70 ml-1">[{det.year}]</span> : null}
               </div>
               <div className="text-sm opacity-80">
                 Providers: {cur.matchedProviders.join(", ") || (cur.unknown ? "Okänd" : "—")}
@@ -229,12 +277,28 @@ function SwipeInner() {
               </div>
             </div>
             {/* back */}
-            <div className="absolute inset-0 p-4 [backface-visibility:hidden] [transform:rotateY(180deg)]">
-              <div className="text-lg font-semibold mb-2">Handling</div>
-              <p className="text-sm opacity-80">
-                Öppna detaljsida snart – MVP visar begränsad info här. (Klicka “Info” igen för att
-                vända tillbaka.)
-              </p>
+            <div className="absolute inset-0 p-4 grid grid-cols-3 gap-3 [backface-visibility:hidden] [transform:rotateY(180deg)]">
+              <div className="col-span-1">
+                {det?.posterUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={det.posterUrl} alt={det.title} className="w-full rounded-lg" />
+                ) : (
+                  <div className="w-full h-48 rounded-lg border border-white/20 flex items-center justify-center text-xs opacity-70">
+                    Ingen poster
+                  </div>
+                )}
+              </div>
+              <div className="col-span-2">
+                <div className="text-lg font-semibold mb-2">{det?.title || cur.title}</div>
+                <p className="text-sm opacity-80">
+                  {det ? det.overview || "Ingen beskrivning." : "Laddar info…"}
+                </p>
+                <div className="mt-3">
+                  <button className="border rounded px-3 py-1" onClick={() => setFlip(false)}>
+                    Tillbaka
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </div>
