@@ -22,6 +22,9 @@ model User {
 
   groupMembers GroupMember[] @relation("UserGroupMembers")
 
+  groupsCreated Group[] @relation("UserGroupsCreated")
+
+
   @@map("users")
 }
 
