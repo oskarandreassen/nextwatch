@@ -3,8 +3,8 @@
 import React, { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Image from "next/image";
-import AppShell from "../../../components/layout/AppShell";
-import ActionDock from "../../../components/ui/ActionDock";
+import AppShell from "../components/layout/AppShell";
+import ActionDock from "../components/ui/ActionDock";
 
 export const dynamic = "force-dynamic";
 
