@@ -16,6 +16,8 @@
     "react-dom": "19.1.0",
     "stripe": "^18.5.0",
     "lucide-react": "^0.453.0"
+    "clsx": "^2.1.1"
+
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
