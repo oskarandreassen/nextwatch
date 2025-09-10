@@ -27,17 +27,13 @@ type Details = {
   year: string | null;
   voteAverage: number | null;
   voteCount: number | null;
+  blurDataURL: string | null;
 };
 type ApiDetailsOk = Details & { ok: true };
 type ApiDetailsErr = { ok: false; error: string };
 
-function isRec(x: FeedItem): x is RecItem {
-  return x.type === "rec";
-}
-function fmtRating(v: number | null): string {
-  if (v == null) return "–";
-  return (Math.round(v * 10) / 10).toFixed(1);
-}
+function isRec(x: FeedItem): x is RecItem { return x.type === "rec"; }
+function fmtRating(v: number | null): string { return v == null ? "–" : (Math.round(v * 10) / 10).toFixed(1); }
 
 function GroupSwipeInner() {
   const sp = useSearchParams();
@@ -49,10 +45,7 @@ function GroupSwipeInner() {
   const [flip, setFlip] = useState(false);
   const [matchFound, setMatchFound] = useState<string | null>(null);
 
-  // cache för details
   const [detailsMap, setDetailsMap] = useState<Record<string, Details>>({});
-
-  // refs för stabila callbacks utan deps-varningar
   const feedRef = useRef<FeedItem[]>([]);
   const indexRef = useRef(0);
   const detailsRef = useRef<Record<string, Details>>({});
@@ -61,7 +54,6 @@ function GroupSwipeInner() {
   useEffect(() => { indexRef.current = idx; }, [idx]);
   useEffect(() => { detailsRef.current = detailsMap; }, [detailsMap]);
 
-  // hämta gruppens feed
   useEffect(() => {
     let ignore = false;
     async function run() {
@@ -79,7 +71,6 @@ function GroupSwipeInner() {
     return () => { ignore = true; };
   }, [code]);
 
-  // hämta details (kontrollerad cache-policy)
   const fetchDetails = useCallback(async (type: "movie" | "tv", id: number, cache: RequestCache) => {
     const key = `${type}:${id}`;
     if (detailsRef.current[key]) return;
@@ -88,12 +79,9 @@ function GroupSwipeInner() {
       const js = (await r.json()) as ApiDetailsOk | ApiDetailsErr;
       if (!js.ok) return;
       setDetailsMap(prev => ({ ...prev, [`${js.mediaType}:${js.id}`]: js }));
-    } catch {
-      // ignore
-    }
+    } catch { /* ignore */ }
   }, []);
 
-  // Prefetch: aktuell (no-store på första för att säkra poster) + nästa
   useEffect(() => {
     const cur = feed[idx];
     if (cur && isRec(cur)) fetchDetails(cur.mediaType, cur.tmdbId, idx === 0 ? "no-store" : "force-cache");
@@ -114,8 +102,7 @@ function GroupSwipeInner() {
   }, []);
 
   const decide = useCallback(async (decision: "like" | "dislike") => {
-    resetCard(); // nollställ position direkt
-
+    resetCard();
     const item = feedRef.current[indexRef.current];
     if (!item || !isRec(item)) {
       setIdx(v => v + 1);
@@ -135,9 +122,8 @@ function GroupSwipeInner() {
           setMatchFound(`Match! ${j.matches.length} träff(ar) för grupp ${code}`);
         }
       }
-    } catch {
-      // ignore
-    } finally {
+    } catch { /* ignore */ }
+    finally {
       setIdx(v => v + 1);
       setFlip(false);
     }
@@ -153,7 +139,6 @@ function GroupSwipeInner() {
     });
   }, []);
 
-  // tangentbord
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       const item = feedRef.current[indexRef.current];
@@ -235,12 +220,8 @@ function GroupSwipeInner() {
               className="relative w-full overflow-hidden rounded-xl border shadow"
               style={{ aspectRatio: "2 / 3" }}
             >
-              <div
-                className={`absolute inset-0 transition-transform duration-300 [transform-style:preserve-3d] ${
-                  flip ? "[transform:rotateY(180deg)]" : ""
-                }`}
-              >
-                {/* FRONT: poster med ALWAYS-ON OVERLAY */}
+              <div className={`absolute inset-0 transition-transform duration-300 [transform-style:preserve-3d] ${flip ? "[transform:rotateY(180deg)]" : ""}`}>
+                {/* FRONT */}
                 <div className="absolute inset-0 [backface-visibility:hidden]">
                   {details?.posterPath ? (
                     <Image
@@ -249,12 +230,15 @@ function GroupSwipeInner() {
                       fill
                       sizes="(min-width: 768px) 640px, 100vw"
                       className="object-cover"
+                      placeholder={details.blurDataURL ? "blur" : undefined}
+                      blurDataURL={details.blurDataURL || undefined}
                       priority={idx === 0}
                     />
                   ) : (
                     <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.06)_25%,rgba(255,255,255,0.12)_37%,rgba(255,255,255,0.06)_63%)] bg-[length:400%_100%] animate-[shimmer_1.2s_infinite] rounded-xl" />
                   )}
 
+                  {/* Overlay (titel · år · betyg) */}
                   <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 p-3 bg-gradient-to-t from-black/70 via-black/20 to-transparent text-white">
                     <div className="flex items-end justify-between gap-3">
                       <div className="min-w-0">
@@ -263,27 +247,29 @@ function GroupSwipeInner() {
                         </div>
                         <div className="text-xs opacity-90">{details?.year ?? "—"}</div>
                       </div>
-                      <div className="text-sm font-medium shrink-0">
-                        ★ {fmtRating(details?.voteAverage ?? null)}
-                      </div>
+                      <div className="text-sm font-medium shrink-0">★ {fmtRating(details?.voteAverage ?? null)}</div>
                     </div>
                   </div>
                 </div>
 
-                {/* BACK: info */}
+                {/* BACK */}
                 <div className="absolute inset-0 p-4 [backface-visibility:hidden] [transform:rotateY(180deg)] bg-black/55 text-white">
                   {isRec(current) && (
                     <>
                       <div className="text-lg font-semibold mb-1">
-                        {details?.title || current.title}{" "}
-                        {details?.year ? <span className="text-xs opacity-70">[{details.year}]</span> : null}
+                        {details?.title || current.title} {details?.year ? <span className="text-xs opacity-70">[{details.year}]</span> : null}
                       </div>
-                      <div className="text-sm opacity-80 mb-2">
-                        Providers: {current.matchedProviders.join(", ") || (current.unknown ? "okänt" : "—")}
+
+                      <div className="flex flex-wrap gap-2 mt-2 mb-3">
+                        {(current.matchedProviders.length ? current.matchedProviders : (current.unknown ? ["Okänd"] : []))
+                          .map((p) => (
+                            <span key={p} className="px-2 py-1 text-xs rounded-full border border-white/30 bg-white/10">
+                              {p}
+                            </span>
+                          ))}
                       </div>
-                      <p className="text-sm opacity-90">
-                        {details ? details.overview || "Ingen beskrivning." : "Laddar info…"}
-                      </p>
+
+                      <p className="text-sm opacity-90">{details ? details.overview || "Ingen beskrivning." : "Laddar info…"}</p>
                     </>
                   )}
                 </div>
@@ -308,12 +294,7 @@ function GroupSwipeInner() {
         </div>
       )}
 
-      <style jsx>{`
-        @keyframes shimmer {
-          0% { background-position: 100% 0; }
-          100% { background-position: 0 0; }
-        }
-      `}</style>
+      <style jsx>{`@keyframes shimmer { 0% { background-position: 100% 0 } 100% { background-position: 0 0 } }`}</style>
     </main>
   );
 }

@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { prisma } from "../../../../lib/prisma";
+import { prisma } from "../../../../lib/prisma"; // OBS: rätt sökväg
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const TMDB = "https://api.themoviedb.org/3";
+const IMG = "https://image.tmdb.org/t/p";
 const H = { Authorization: `Bearer ${process.env.TMDB_V4_TOKEN!}` };
 
 type MovieDetails = {
@@ -37,15 +38,29 @@ type NormalizedDetails = {
   year: string | null;
   voteAverage: number | null;
   voteCount: number | null;
+  blurDataURL: string | null;
 };
 
 function posterUrl(path: string | null | undefined): string | null {
-  return path ? `https://image.tmdb.org/t/p/w500${path}` : null;
+  return path ? `${IMG}/w500${path}` : null;
 }
 function yearFromDate(d?: string | null): string | null {
   if (!d) return null;
   const y = d.slice(0, 4);
   return /^\d{4}$/.test(y) ? y : null;
+}
+async function buildBlurDataURL(path: string | null | undefined): Promise<string | null> {
+  if (!path) return null;
+  try {
+    const r = await fetch(`${IMG}/w92${path}`, { next: { revalidate: 86400 } });
+    if (!r.ok) return null;
+    const ct = r.headers.get("content-type") || "image/jpeg";
+    const buf = await r.arrayBuffer();
+    const base64 = Buffer.from(buf).toString("base64");
+    return `data:${ct};base64,${base64}`;
+  } catch {
+    return null;
+  }
 }
 
 export async function GET(req: Request) {
@@ -57,6 +72,7 @@ export async function GET(req: Request) {
       return NextResponse.json({ ok: false, error: "missing or invalid type/id" }, { status: 400 });
     }
 
+    // språk/region från profil om finns
     const c = await cookies();
     const uid = c.get("nw_uid")?.value || null;
     let language = "sv-SE";
@@ -67,8 +83,8 @@ export async function GET(req: Request) {
       if (profile?.region) region = profile.region;
     }
 
-    const q = new URLSearchParams({ language, region });
-    const r = await fetch(`${TMDB}/${type}/${id}?${q.toString()}`, {
+    const qs = new URLSearchParams({ language, region });
+    const r = await fetch(`${TMDB}/${type}/${id}?${qs.toString()}`, {
       headers: H,
       next: { revalidate: 3600 },
     });
@@ -76,6 +92,7 @@ export async function GET(req: Request) {
 
     if (type === "movie") {
       const d = (await r.json()) as MovieDetails;
+      const blurDataURL = await buildBlurDataURL(d.poster_path);
       const res: NormalizedDetails = {
         ok: true,
         id: d.id,
@@ -87,10 +104,12 @@ export async function GET(req: Request) {
         year: yearFromDate(d.release_date ?? null),
         voteAverage: typeof d.vote_average === "number" ? d.vote_average : null,
         voteCount: typeof d.vote_count === "number" ? d.vote_count : null,
+        blurDataURL,
       };
       return NextResponse.json(res);
     } else {
       const d = (await r.json()) as TvDetails;
+      const blurDataURL = await buildBlurDataURL(d.poster_path);
       const res: NormalizedDetails = {
         ok: true,
         id: d.id,
@@ -102,6 +121,7 @@ export async function GET(req: Request) {
         year: yearFromDate(d.first_air_date ?? null),
         voteAverage: typeof d.vote_average === "number" ? d.vote_average : null,
         voteCount: typeof d.vote_count === "number" ? d.vote_count : null,
+        blurDataURL,
       };
       return NextResponse.json(res);
     }

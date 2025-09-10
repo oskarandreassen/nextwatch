@@ -33,6 +33,7 @@ type Details = {
   year: string | null;
   voteAverage: number | null;
   voteCount: number | null;
+  blurDataURL: string | null;
 };
 type ApiDetailsOk = Details & { ok: true };
 type ApiDetailsErr = { ok: false; error: string };
@@ -173,7 +174,7 @@ function SwipeInner() {
     return () => window.removeEventListener("keydown", handleKey);
   }, [handleKey]);
 
-  // Pointer events
+  // Pointer
   const onPointerDown = useCallback((e: React.PointerEvent) => {
     startX.current = e.clientX; startT.current = e.timeStamp;
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
@@ -241,34 +242,41 @@ function SwipeInner() {
                       fill
                       sizes="(min-width: 768px) 640px, 100vw"
                       className="object-cover"
+                      placeholder={det.blurDataURL ? "blur" : undefined}
+                      blurDataURL={det.blurDataURL || undefined}
                       priority={i === 0}
                     />
                   ) : (
                     <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.06)_25%,rgba(255,255,255,0.12)_37%,rgba(255,255,255,0.06)_63%)] bg-[length:400%_100%] animate-[shimmer_1.2s_infinite] rounded-xl" />
                   )}
 
-                  {/* ALWAYS-ON OVERLAY (ligger över bilden, stör inte drag/tap) */}
+                  {/* ALWAYS-ON OVERLAY */}
                   <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 p-3 bg-gradient-to-t from-black/70 via-black/20 to-transparent text-white">
                     <div className="flex items-end justify-between gap-3">
                       <div className="min-w-0">
                         <div className="text-base font-semibold truncate">{det?.title ?? cur.title}</div>
                         <div className="text-xs opacity-90">{det?.year ?? "—"}</div>
                       </div>
-                      <div className="text-sm font-medium shrink-0">
-                        ★ {fmtRating(det?.voteAverage ?? null)}
-                      </div>
+                      <div className="text-sm font-medium shrink-0">★ {fmtRating(det?.voteAverage ?? null)}</div>
                     </div>
                   </div>
                 </div>
 
-                {/* BACK: info */}
+                {/* BACK: info + provider-chips */}
                 <div className="absolute inset-0 p-4 [backface-visibility:hidden] [transform:rotateY(180deg)] bg-black/55 text-white">
                   <div className="text-lg font-semibold mb-1">
                     {det?.title || cur.title} {det?.year ? <span className="text-xs opacity-70">[{det.year}]</span> : null}
                   </div>
-                  <div className="text-sm opacity-80 mb-2">
-                    Providers: {cur.matchedProviders.join(", ") || (cur.unknown ? "Okänd" : "—")}
+
+                  <div className="flex flex-wrap gap-2 mt-2 mb-3">
+                    {(cur.matchedProviders.length ? cur.matchedProviders : (cur.unknown ? ["Okänd"] : []))
+                      .map((p) => (
+                        <span key={p} className="px-2 py-1 text-xs rounded-full border border-white/30 bg-white/10">
+                          {p}
+                        </span>
+                      ))}
                   </div>
+
                   <p className="text-sm opacity-90">{det ? det.overview || "Ingen beskrivning." : "Laddar info…"}</p>
                 </div>
               </div>
