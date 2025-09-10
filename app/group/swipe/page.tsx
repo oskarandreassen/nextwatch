@@ -1,6 +1,8 @@
 "use client";
-import React, { useCallback, useEffect, useState } from "react";
+import React, { Suspense, useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
+
+export const dynamic = "force-dynamic";
 
 type RecItem = {
   type: "rec";
@@ -24,7 +26,7 @@ function isRec(x: FeedItem): x is RecItem {
   return x.type === "rec";
 }
 
-export default function GroupSwipePage() {
+function GroupSwipeInner() {
   const sp = useSearchParams();
   const code = (sp.get("code") || "").toUpperCase();
 
@@ -71,8 +73,8 @@ export default function GroupSwipePage() {
           body: JSON.stringify({
             tmdbId: item.tmdbId,
             mediaType: item.mediaType,
-            decision, // "like" | "dislike"
-            groupCode: code, // för ev. loggning framåt
+            decision,
+            groupCode: code, // ev. telemetry framåt
           }),
         });
 
@@ -223,5 +225,13 @@ export default function GroupSwipePage() {
         </div>
       )}
     </main>
+  );
+}
+
+export default function GroupSwipePage() {
+  return (
+    <Suspense fallback={<main className="p-6 max-w-xl mx-auto">Laddar…</main>}>
+      <GroupSwipeInner />
+    </Suspense>
   );
 }
