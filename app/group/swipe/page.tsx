@@ -29,10 +29,12 @@ type Details = {
   mediaType: "movie" | "tv";
   title: string;
   overview: string;
-  posterUrl: string | null;   // kvar för back-compat
-  posterPath: string | null;  // används för w780 på fronten
+  posterUrl: string | null;
+  posterPath: string | null;
   year: string | null;
 };
+type ApiDetailsOk = Details & { ok: true };
+type ApiDetailsErr = { ok: false; error: string };
 
 function isRec(x: FeedItem): x is RecItem {
   return x.type === "rec";
@@ -48,7 +50,6 @@ function GroupSwipeInner() {
   const [flip, setFlip] = useState(false);
   const [matchFound, setMatchFound] = useState<string | null>(null);
 
-  // refs för stabila handlers
   const feedRef = useRef<FeedItem[]>([]);
   const indexRef = useRef(0);
   const [detailsMap, setDetailsMap] = useState<Record<string, Details>>({});
@@ -77,7 +78,7 @@ function GroupSwipeInner() {
     return () => { ignore = true; };
   }, [code]);
 
-  // prefetch details för aktuell rec
+  // prefetch details för aktuell rec (strikt typat)
   useEffect(() => {
     const cur = feed[idx];
     if (!cur || !isRec(cur)) return;
@@ -88,14 +89,23 @@ function GroupSwipeInner() {
     (async () => {
       try {
         const r = await fetch(`/api/tmdb/details?type=${cur.mediaType}&id=${cur.tmdbId}`, { cache: "force-cache" });
-        const js = await r.json();
-        if (cancelled || !js?.ok) return;
-        const det = js as Details & { ok: true };
-        setDetailsMap(prev => ({ ...prev, [`${det.mediaType}:${det.id}`]: {
-          id: det.id, mediaType: det.mediaType, title: det.title, overview: det.overview,
-          posterUrl: det.posterUrl, posterPath: (det as any).posterPath ?? null, year: det.year
-        }}));
-      } catch { /* ignore */ }
+        const js = (await r.json()) as ApiDetailsOk | ApiDetailsErr;
+        if (cancelled || !js.ok) return;
+        setDetailsMap(prev => ({
+          ...prev,
+          [`${js.mediaType}:${js.id}`]: {
+            id: js.id,
+            mediaType: js.mediaType,
+            title: js.title,
+            overview: js.overview,
+            posterUrl: js.posterUrl,
+            posterPath: js.posterPath,
+            year: js.year,
+          },
+        }));
+      } catch {
+        /* ignore */
+      }
     })();
     return () => { cancelled = true; };
   }, [feed, idx]);
@@ -235,14 +245,14 @@ function CardRec(props: {
 
   return (
     <>
-      {/* Kortcontainer: FRONT = poster (fast 2:3), BACK = detaljer */}
+      {/* Kortcontainer: FRONT = poster (fix 2:3), BACK = detaljer */}
       <div className="relative w-full select-none" style={{ aspectRatio: "2 / 3" }}>
         <div
           className={`absolute inset-0 rounded-xl border transition-transform duration-300 [transform-style:preserve-3d] ${
             flip ? "[transform:rotateY(180deg)]" : ""
           }`}
         >
-          {/* FRONT: poster (skarpare via w780) */}
+          {/* FRONT: poster (w780 för skärpa) */}
           <div className="absolute inset-0 [backface-visibility:hidden] overflow-hidden rounded-xl">
             {details?.posterPath ? (
               <Image
