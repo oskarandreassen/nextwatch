@@ -10,6 +10,24 @@ type DiscoverResp = { results?: TMDbItem[] };
 type ProviderEntry = { provider_id:number; provider_name:string };
 type ProvidersSE = { flatrate?: ProviderEntry[] } | null;
 
+type RecItem = {
+  type: "rec";
+  tmdbId: number;
+  mediaType: "movie" | "tv";
+  title: string;
+  matchedProviders: string[];
+  unknown: boolean;
+};
+
+type AdItem = {
+  type: "ad";
+  id: string;
+  headline: string;
+  body: string;
+  cta: string;
+  href: string;
+};
+
 const TMDB_BASE = "https://api.themoviedb.org/3";
 
 function ageFromDob(d: Date) {
@@ -25,7 +43,6 @@ function seMaxCert(age: number) {
   if (age >= 7) return "7";
   return "0";
 }
-function norm(s: string) { return s.toLowerCase().replace(/\s+/g," ").replace(/\+/g,"plus").trim(); }
 
 async function discover(kind: "movie"|"tv", page: number, language: string, region: string, certMax?: string) {
   if (certMax) {
@@ -105,7 +122,7 @@ export async function GET(req: Request) {
     // providerfilter med TMDb
     const CHECK_CAP = Math.min(items.length, 80);
     const subset = items.slice(0, CHECK_CAP);
-    const recs: Array<{ type:"rec"; tmdbId:number; mediaType:"movie"|"tv"; title:string; matchedProviders:string[]; unknown:boolean }> = [];
+    const recs: RecItem[] = [];
 
     const allowed = new Set(intersection.map(s => s.toLowerCase().replace(/\s+/g," ").replace(/\+/g,"plus").trim()));
 
@@ -128,21 +145,22 @@ export async function GET(req: Request) {
 
     // premium-gating + annonsinjektion
     const hasLifetime = users.some(u => (u.plan ?? "free") === "lifetime");
-    const feed: Array<any> = [];
+    const feed: Array<RecItem | AdItem> = [];
     const adEvery = 12;
     if (hasLifetime) {
       feed.push(...recs);
     } else {
       recs.forEach((r, idx) => {
         if (idx > 0 && idx % adEvery === 0) {
-          feed.push({
-            type:"ad",
-            id:`house-${idx/adEvery}`,
-            headline:"Uppgradera till Premium (lifetime)",
-            body:"Större grupper och inga annonser.",
-            cta:"Läs mer",
-            href:"/premium"
-          });
+          const ad: AdItem = {
+            type: "ad",
+            id: `house-${idx/adEvery}`,
+            headline: "Uppgradera till Premium (lifetime)",
+            body: "Större grupper och inga annonser.",
+            cta: "Läs mer",
+            href: "/premium"
+          };
+          feed.push(ad);
         }
         feed.push(r);
       });

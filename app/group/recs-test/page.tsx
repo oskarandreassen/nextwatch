@@ -2,20 +2,37 @@
 
 import { useEffect, useState } from "react";
 
-type FeedItem =
-  | { type:"rec"; tmdbId:number; mediaType:"movie"|"tv"; title:string; matchedProviders:string[]; unknown:boolean }
-  | { type:"ad"; id:string; headline:string; body:string; cta:string; href:string };
+type RecItem = {
+  type: "rec";
+  tmdbId: number;
+  mediaType: "movie" | "tv";
+  title: string;
+  matchedProviders: string[];
+  unknown: boolean;
+};
+type AdItem = {
+  type: "ad";
+  id: string;
+  headline: string;
+  body: string;
+  cta: string;
+  href: string;
+};
+type FeedItem = RecItem | AdItem;
 
 export default function GroupRecsTest({ searchParams }: { searchParams: { code?: string } }) {
   const [feed, setFeed] = useState<FeedItem[]>([]);
   const [err, setErr] = useState("");
-  const code = (typeof window === "undefined" ? searchParams?.code : new URLSearchParams(window.location.search).get("code")) || "";
+  const code =
+    (typeof window === "undefined"
+      ? searchParams?.code
+      : new URLSearchParams(window.location.search).get("code")) || "";
 
   useEffect(() => {
     if (!code) return;
     fetch(`/api/recs/group-smart?code=${encodeURIComponent(code)}&media=both&limit=30`)
       .then(r => r.json())
-      .then(js => { if (js.ok) setFeed(js.feed); else setErr(js.error || "Fel"); })
+      .then(js => { if (js.ok) setFeed(js.feed as FeedItem[]); else setErr(js.error || "Fel"); })
       .catch(e => setErr(String(e)));
   }, [code]);
 
@@ -27,9 +44,11 @@ export default function GroupRecsTest({ searchParams }: { searchParams: { code?:
     <div className="max-w-3xl mx-auto p-6 space-y-3">
       <h1 className="text-2xl font-bold">Grupprekommendationer</h1>
       {feed.map((item, idx) => (
-        <div key={("type" in item && item.type === "ad") ? `ad-${item.id}-${idx}` : `rec-${(item as any).tmdbId}-${idx}`}
-             className="border rounded-md p-3">
-          {"type" in item && item.type === "ad" ? (
+        <div
+          key={item.type === "ad" ? `ad-${item.id}-${idx}` : `rec-${(item as RecItem).tmdbId}-${idx}`}
+          className="border rounded-md p-3"
+        >
+          {item.type === "ad" ? (
             <div>
               <div className="text-sm opacity-60 mb-1">Annons</div>
               <div className="font-medium">{item.headline}</div>
