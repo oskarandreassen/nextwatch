@@ -6,9 +6,14 @@ export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {
-    const r = await prisma.$queryRaw<{ x:number }[]>`SELECT 1 as x`;
-    return NextResponse.json({ ok:true, x:r[0]?.x ?? null, hasDb: !!process.env.DATABASE_URL });
-  } catch (e:any) {
-    return NextResponse.json({ ok:false, error: String(e?.message || e) }, { status: 500 });
+    const r = await prisma.$queryRaw<{ x: number }[]>`SELECT 1 as x`;
+    return NextResponse.json({
+      ok: true,
+      x: r[0]?.x ?? null,
+      hasDb: Boolean(process.env.DATABASE_URL),
+    });
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return NextResponse.json({ ok: false, error: msg }, { status: 500 });
   }
 }
