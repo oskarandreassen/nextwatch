@@ -20,14 +20,7 @@ type RecItem = {
   matchedProviders: string[];
   unknown: boolean;
 };
-type AdItem = {
-  type: "ad";
-  id: string;
-  headline: string;
-  body: string;
-  cta: string;
-  href: string;
-};
+type AdItem = { type: "ad"; id: string; headline: string; body: string; cta: string; href: string };
 type FeedItem = RecItem | AdItem;
 
 type Details = {
@@ -38,12 +31,18 @@ type Details = {
   posterUrl: string | null;
   posterPath: string | null;
   year: string | null;
+  voteAverage: number | null;
+  voteCount: number | null;
 };
 type ApiDetailsOk = Details & { ok: true };
 type ApiDetailsErr = { ok: false; error: string };
 
 function isRec(x: FeedItem | undefined): x is RecItem {
   return !!x && x.type === "rec";
+}
+function fmtRating(v: number | null): string {
+  if (v == null) return "–";
+  return (Math.round(v * 10) / 10).toFixed(1);
 }
 
 function SwipeInner() {
@@ -57,7 +56,6 @@ function SwipeInner() {
 
   const [detailsMap, setDetailsMap] = useState<Record<string, Details>>({});
 
-  // refs för stabila handlers
   const feedRef = useRef<FeedItem[]>([]);
   const indexRef = useRef(0);
   const detailsRef = useRef<Record<string, Details>>({});
@@ -66,7 +64,7 @@ function SwipeInner() {
   useEffect(() => { indexRef.current = i; }, [i]);
   useEffect(() => { detailsRef.current = detailsMap; }, [detailsMap]);
 
-  // ladda feed
+  // Ladda feed
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -75,8 +73,7 @@ function SwipeInner() {
         const js = await r.json();
         if (cancelled) return;
         if (js?.ok) {
-          const f = js.feed as FeedItem[];
-          setFeed(f);
+          setFeed(js.feed as FeedItem[]);
           setI(0);
           setFlip(false);
           setErr("");
@@ -88,7 +85,7 @@ function SwipeInner() {
     return () => { cancelled = true; };
   }, [media]);
 
-  // hämta detaljer (valbar cache-policy)
+  // Hämta details (valbar cache-policy)
   const fetchDetails = useCallback(async (type: "movie" | "tv", id: number, cache: RequestCache) => {
     const key = `${type}:${id}`;
     if (detailsRef.current[key]) return;
@@ -96,22 +93,11 @@ function SwipeInner() {
       const r = await fetch(`/api/tmdb/details?type=${type}&id=${id}`, { cache });
       const js = (await r.json()) as ApiDetailsOk | ApiDetailsErr;
       if (!js.ok) return;
-      setDetailsMap(prev => ({
-        ...prev,
-        [`${js.mediaType}:${js.id}`]: {
-          id: js.id,
-          mediaType: js.mediaType,
-          title: js.title,
-          overview: js.overview,
-          posterUrl: js.posterUrl,
-          posterPath: js.posterPath,
-          year: js.year,
-        },
-      }));
+      setDetailsMap(prev => ({ ...prev, [`${js.mediaType}:${js.id}`]: js }));
     } catch { /* ignore */ }
   }, []);
 
-  // Prefetch: aktuell (no-store om första) + nästa (force-cache)
+  // Prefetch: aktuell (no-store på första) + nästa
   useEffect(() => {
     const cur = feed[i];
     if (isRec(cur)) fetchDetails(cur.mediaType, cur.tmdbId, i === 0 ? "no-store" : "force-cache");
@@ -119,7 +105,7 @@ function SwipeInner() {
     if (isRec(nxt)) fetchDetails(nxt.mediaType, nxt.tmdbId, "force-cache");
   }, [feed, i, fetchDetails]);
 
-  // drag/tap state
+  // Drag/tap
   const cardWrapRef = useRef<HTMLDivElement | null>(null);
   const startX = useRef<number | null>(null);
   const startT = useRef<number>(0);
@@ -132,9 +118,7 @@ function SwipeInner() {
   }, []);
 
   const decide = useCallback(async (kind: "like" | "dislike" | "skip" | "seen") => {
-    // nollställ position direkt så nästa kort börjar rakt
-    resetCardTransform();
-
+    resetCardTransform(); // nollställ position direkt
     const idx = indexRef.current;
     const item = feedRef.current[idx];
     if (!item || item.type === "ad") {
@@ -168,14 +152,13 @@ function SwipeInner() {
     } catch { /* ignore */ }
   }, []);
 
-  // tangentbord
+  // Tangentbord
   const handleKey = useCallback((e: KeyboardEvent) => {
     const idx = indexRef.current;
     const item = feedRef.current[idx];
     if (!item || item.type === "ad") {
       if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
-        setI(v => v + 1);
-        setFlip(false);
+        setI(v => v + 1); setFlip(false);
       }
       return;
     }
@@ -190,10 +173,9 @@ function SwipeInner() {
     return () => window.removeEventListener("keydown", handleKey);
   }, [handleKey]);
 
-  // pointer
+  // Pointer events
   const onPointerDown = useCallback((e: React.PointerEvent) => {
-    startX.current = e.clientX;
-    startT.current = e.timeStamp;
+    startX.current = e.clientX; startT.current = e.timeStamp;
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
     if (cardWrapRef.current) cardWrapRef.current.style.transition = "transform 0s";
   }, []);
@@ -203,15 +185,11 @@ function SwipeInner() {
     cardWrapRef.current.style.transform = `translateX(${dx}px) rotate(${dx / 20}deg)`;
   }, []);
   const onPointerEnd = useCallback((e: React.PointerEvent) => {
-    const sx = startX.current;
-    startX.current = null;
+    const sx = startX.current; startX.current = null;
     (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
     if (sx == null) return;
-
-    const dx = e.clientX - sx;
-    const dt = e.timeStamp - startT.current;
+    const dx = e.clientX - sx; const dt = e.timeStamp - startT.current;
     const isTap = Math.abs(dx) < 10 && dt < 300;
-
     if (isTap) { setFlip(f => !f); resetCardTransform(); return; }
     if (dx > 120) { decide("like"); return; }
     if (dx < -120) { decide("dislike"); return; }
@@ -219,7 +197,6 @@ function SwipeInner() {
   }, [decide, resetCardTransform]);
 
   const cur = feed[i];
-
   if (err) return <div className="p-6 text-red-500">{err}</div>;
   if (!cur) return <div className="p-6">Slut på förslag för nu.</div>;
 
@@ -236,13 +213,11 @@ function SwipeInner() {
           <div className="font-semibold">{cur.headline}</div>
           <div className="text-sm opacity-80">{cur.body}</div>
           <a className="underline text-sm" href={cur.href}>{cur.cta}</a>
-          <div className="mt-4">
-            <button className="border rounded px-3 py-1 mr-2" onClick={() => setI(v => v + 1)}>Fortsätt</button>
-          </div>
+          <div className="mt-4"><button className="border rounded px-3 py-1 mr-2" onClick={() => setI(v => v + 1)}>Fortsätt</button></div>
         </div>
       ) : (
         <>
-          {/* Flip: front = poster, back = info */}
+          {/* Flip: front = poster (med overlay), back = info */}
           <div
             className="[perspective:1000px] select-none cursor-grab active:cursor-grabbing"
             style={{ touchAction: "pan-y" }}
@@ -256,12 +231,8 @@ function SwipeInner() {
               className="relative w-full overflow-hidden rounded-xl border shadow"
               style={{ aspectRatio: "2 / 3" }}
             >
-              <div
-                className={`absolute inset-0 transition-transform duration-300 [transform-style:preserve-3d] ${
-                  flip ? "[transform:rotateY(180deg)]" : ""
-                }`}
-              >
-                {/* FRONT: poster */}
+              <div className={`absolute inset-0 transition-transform duration-300 [transform-style:preserve-3d] ${flip ? "[transform:rotateY(180deg)]" : ""}`}>
+                {/* FRONT */}
                 <div className="absolute inset-0 [backface-visibility:hidden]">
                   {det?.posterPath ? (
                     <Image
@@ -275,6 +246,19 @@ function SwipeInner() {
                   ) : (
                     <div className="absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.06)_25%,rgba(255,255,255,0.12)_37%,rgba(255,255,255,0.06)_63%)] bg-[length:400%_100%] animate-[shimmer_1.2s_infinite] rounded-xl" />
                   )}
+
+                  {/* ALWAYS-ON OVERLAY (ligger över bilden, stör inte drag/tap) */}
+                  <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 p-3 bg-gradient-to-t from-black/70 via-black/20 to-transparent text-white">
+                    <div className="flex items-end justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-base font-semibold truncate">{det?.title ?? cur.title}</div>
+                        <div className="text-xs opacity-90">{det?.year ?? "—"}</div>
+                      </div>
+                      <div className="text-sm font-medium shrink-0">
+                        ★ {fmtRating(det?.voteAverage ?? null)}
+                      </div>
+                    </div>
+                  </div>
                 </div>
 
                 {/* BACK: info */}
@@ -302,12 +286,10 @@ function SwipeInner() {
       )}
 
       <div className="mt-4 text-sm opacity-70">
-        Tips: Tap för att vända. ←/→ för Nej/Ja, ↑ för Watchlist, Space för att vända kortet.
+        Tips: Tryck/tap på kortet för att vända. ←/→ Nej/Ja, ↑ Watchlist, Space vänd.
       </div>
 
-      <style jsx>{`
-        @keyframes shimmer { 0% { background-position: 100% 0; } 100% { background-position: 0 0; } }
-      `}</style>
+      <style jsx>{`@keyframes shimmer { 0% { background-position: 100% 0 } 100% { background-position: 0 0 } }`}</style>
     </div>
   );
 }
