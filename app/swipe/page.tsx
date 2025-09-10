@@ -3,8 +3,9 @@
 import React, { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Image from "next/image";
-import AppShell from "../components/layout/AppShell";
+import AppShell from "../components/layouts/AppShell";
 import ActionDock from "../components/ui/ActionDock";
+import InfoPanel from "../components/panels/InfoPanel";
 
 export default function SwipePage() {
   return (
@@ -69,7 +70,6 @@ function SwipeInner() {
   useEffect(() => { indexRef.current = i; }, [i]);
   useEffect(() => { detailsRef.current = detailsMap; }, [detailsMap]);
 
-  // Ladda feed
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -90,7 +90,6 @@ function SwipeInner() {
     return () => { cancelled = true; };
   }, [media]);
 
-  // Hämta details
   const fetchDetails = useCallback(async (type: "movie" | "tv", id: number, cache: RequestCache) => {
     const key = `${type}:${id}`;
     if (detailsRef.current[key]) return;
@@ -102,7 +101,6 @@ function SwipeInner() {
     } catch { /* ignore */ }
   }, []);
 
-  // Prefetch: aktuell (no-store på första) + nästa
   useEffect(() => {
     const cur = feed[i];
     if (isRec(cur)) fetchDetails(cur.mediaType, cur.tmdbId, i === 0 ? "no-store" : "force-cache");
@@ -110,7 +108,6 @@ function SwipeInner() {
     if (isRec(nxt)) fetchDetails(nxt.mediaType, nxt.tmdbId, "force-cache");
   }, [feed, i, fetchDetails]);
 
-  // Drag/tap
   const cardWrapRef = useRef<HTMLDivElement | null>(null);
   const startX = useRef<number | null>(null);
   const startT = useRef<number>(0);
@@ -157,7 +154,6 @@ function SwipeInner() {
     } catch { /* ignore */ }
   }, []);
 
-  // Tangentbord
   const handleKey = useCallback((e: KeyboardEvent) => {
     const idx = indexRef.current;
     const item = feedRef.current[idx];
@@ -178,7 +174,6 @@ function SwipeInner() {
     return () => window.removeEventListener("keydown", handleKey);
   }, [handleKey]);
 
-  // Pointer
   const onPointerDown = useCallback((e: React.PointerEvent) => {
     startX.current = e.clientX; startT.current = e.timeStamp;
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
@@ -209,88 +204,109 @@ function SwipeInner() {
   const det = isRec(cur) ? detailsMap[dKey] : undefined;
 
   return (
-    <div className="mx-auto max-w-xl p-6">
+    <div className="mx-auto max-w-5xl p-6">
       <h1 className="mb-4 text-2xl font-bold">Dina förslag</h1>
 
-      {cur.type === "ad" ? (
-        <div className="mb-4 rounded-xl border p-5">
-          <div className="mb-1 text-xs opacity-60">Annons</div>
-          <div className="font-semibold">{cur.headline}</div>
-          <div className="text-sm opacity-80">{cur.body}</div>
-          <a className="text-sm underline" href={cur.href}>{cur.cta}</a>
-        </div>
-      ) : (
-        <>
-          <div
-            className="[perspective:1000px] select-none cursor-grab active:cursor-grabbing"
-            style={{ touchAction: "pan-y" }}
-            onPointerDown={onPointerDown}
-            onPointerMove={onPointerMove}
-            onPointerUp={onPointerEnd}
-            onPointerCancel={onPointerEnd}
-          >
-            <div
-              ref={cardWrapRef}
-              className="relative w-full overflow-hidden rounded-xl border shadow"
-              style={{ aspectRatio: "2 / 3" }}
-            >
-              <div className={`absolute inset-0 transition-transform duration-300 [transform-style:preserve-3d] ${flip ? "[transform:rotateY(180deg)]" : ""}`}>
-                {/* FRONT */}
-                <div className="absolute inset-0 [backface-visibility:hidden]">
-                  {det?.posterPath ? (
-                    <Image
-                      src={`https://image.tmdb.org/t/p/w780${det.posterPath}`}
-                      alt={det.title}
-                      fill
-                      sizes="(min-width: 768px) 640px, 100vw"
-                      className="object-cover"
-                      placeholder={det.blurDataURL ? "blur" : undefined}
-                      blurDataURL={det.blurDataURL || undefined}
-                      priority={i === 0}
-                    />
-                  ) : (
-                    <div className="absolute inset-0 rounded-xl bg-[linear-gradient(90deg,rgba(255,255,255,0.06)_25%,rgba(255,255,255,0.12)_37%,rgba(255,255,255,0.06)_63%)] bg-[length:400%_100%] animate-[shimmer_1.2s_infinite]" />
-                  )}
-                  {/* Overlay */}
-                  <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-black/70 via-black/20 to-transparent p-3 text-white">
-                    <div className="flex items-end justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="truncate text-base font-semibold">{det?.title ?? cur.title}</div>
-                        <div className="text-xs opacity-90">{det?.year ?? "—"}</div>
+      <div className="md:grid md:grid-cols-[minmax(0,1fr)_320px] md:gap-6">
+        {/* KORTET (vänster) */}
+        <div>
+          {cur.type === "ad" ? (
+            <div className="mb-4 rounded-xl border p-5">
+              <div className="mb-1 text-xs opacity-60">Annons</div>
+              <div className="font-semibold">{cur.headline}</div>
+              <div className="text-sm opacity-80">{cur.body}</div>
+              <a className="text-sm underline" href={cur.href}>{cur.cta}</a>
+            </div>
+          ) : (
+            <>
+              <div
+                className="[perspective:1000px] select-none cursor-grab active:cursor-grabbing"
+                style={{ touchAction: "pan-y" }}
+                onPointerDown={onPointerDown}
+                onPointerMove={onPointerMove}
+                onPointerUp={onPointerEnd}
+                onPointerCancel={onPointerEnd}
+              >
+                <div
+                  ref={cardWrapRef}
+                  className="relative w-full overflow-hidden rounded-xl border shadow"
+                  style={{ aspectRatio: "2 / 3" }}
+                >
+                  <div className={`absolute inset-0 transition-transform duration-300 [transform-style:preserve-3d] ${flip ? "[transform:rotateY(180deg)]" : ""}`}>
+                    {/* FRONT */}
+                    <div className="absolute inset-0 [backface-visibility:hidden]">
+                      {det?.posterPath ? (
+                        <Image
+                          src={`https://image.tmdb.org/t/p/w780${det.posterPath}`}
+                          alt={det.title}
+                          fill
+                          sizes="(min-width: 768px) 640px, 100vw"
+                          className="object-cover"
+                          placeholder={det.blurDataURL ? "blur" : undefined}
+                          blurDataURL={det.blurDataURL || undefined}
+                          priority={i === 0}
+                        />
+                      ) : (
+                        <div className="absolute inset-0 rounded-xl bg-[linear-gradient(90deg,rgba(255,255,255,0.06)_25%,rgba(255,255,255,0.12)_37%,rgba(255,255,255,0.06)_63%)] bg-[length:400%_100%] animate-[shimmer_1.2s_infinite]" />
+                      )}
+                      {/* Overlay */}
+                      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-black/70 via-black/20 to-transparent p-3 text-white">
+                        <div className="flex items-end justify-between gap-3">
+                          <div className="min-w-0">
+                            <div className="truncate text-base font-semibold">{det?.title ?? cur.title}</div>
+                            <div className="text-xs opacity-90">{det?.year ?? "—"}</div>
+                          </div>
+                          <div className="shrink-0 text-sm font-medium">★ {fmtRating(det?.voteAverage ?? null)}</div>
+                        </div>
                       </div>
-                      <div className="shrink-0 text-sm font-medium">★ {fmtRating(det?.voteAverage ?? null)}</div>
+                    </div>
+
+                    {/* BACK */}
+                    <div className="absolute inset-0 bg-black/55 p-4 text-white [backface-visibility:hidden] [transform:rotateY(180deg)]">
+                      <div className="mb-1 text-lg font-semibold">
+                        {det?.title || cur.title} {det?.year ? <span className="text-xs opacity-70">[{det.year}]</span> : null}
+                      </div>
+                      <div className="mb-3 mt-2 flex flex-wrap gap-2">
+                        {(cur.matchedProviders.length ? cur.matchedProviders : (cur.unknown ? ["Okänd"] : []))
+                          .map((p) => (
+                            <span key={p} className="rounded-full border border-white/30 bg-white/10 px-2 py-1 text-xs">
+                              {p}
+                            </span>
+                          ))}
+                      </div>
+                      <p className="text-sm opacity-90">{det ? det.overview || "Ingen beskrivning." : "Laddar info…"}</p>
                     </div>
                   </div>
                 </div>
-
-                {/* BACK */}
-                <div className="absolute inset-0 bg-black/55 p-4 text-white [backface-visibility:hidden] [transform:rotateY(180deg)]">
-                  <div className="mb-1 text-lg font-semibold">
-                    {det?.title || cur.title} {det?.year ? <span className="text-xs opacity-70">[{det.year}]</span> : null}
-                  </div>
-                  <div className="mb-3 mt-2 flex flex-wrap gap-2">
-                    {(cur.matchedProviders.length ? cur.matchedProviders : (cur.unknown ? ["Okänd"] : []))
-                      .map((p) => (
-                        <span key={p} className="rounded-full border border-white/30 bg-white/10 px-2 py-1 text-xs">
-                          {p}
-                        </span>
-                      ))}
-                  </div>
-                  <p className="text-sm opacity-90">{det ? det.overview || "Ingen beskrivning." : "Laddar info…"}</p>
-                </div>
               </div>
-            </div>
-          </div>
 
-          {/* Tinder-lik dock */}
-          <ActionDock
+              {/* Tinder-lik dock */}
+              <ActionDock
+                onNope={() => decide("dislike")}
+                onInfo={() => setFlip(f => !f)}
+                onWatchlist={toggleWatch}
+                onLike={() => decide("like")}
+              />
+            </>
+          )}
+        </div>
+
+        {/* INFOPANEL (höger – desktop) */}
+        {isRec(cur) && (
+          <InfoPanel
+            title={det?.title || cur.title}
+            year={det?.year ?? null}
+            rating={det?.voteAverage ?? null}
+            overview={det?.overview}
+            providers={cur.matchedProviders}
+            unknown={cur.unknown}
             onNope={() => decide("dislike")}
-            onInfo={() => setFlip(f => !f)}
-            onWatchlist={toggleWatch}
             onLike={() => decide("like")}
+            onWatchlist={toggleWatch}
+            className="md:mt-1"
           />
-        </>
-      )}
+        )}
+      </div>
 
       <div className="mt-4 text-sm opacity-70">
         Tips: Tap/klick för att vända. ←/→ Nej/Ja, ↑ Watchlist, Space vänd.

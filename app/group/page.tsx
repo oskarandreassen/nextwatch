@@ -3,8 +3,9 @@
 import React, { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Image from "next/image";
-import AppShell from "../components/layout/AppShell";
-import ActionDock from "../components/ui/ActionDock";
+import AppShell from "../../components/layouts/AppShell";
+import ActionDock from "../../components/ui/ActionDock";
+import InfoPanel from "../../components/panels/InfoPanel";
 
 export const dynamic = "force-dynamic";
 
@@ -101,7 +102,6 @@ function GroupSwipeInner() {
     if (nxt && isRec(nxt)) fetchDetails(nxt.mediaType, nxt.tmdbId, "force-cache");
   }, [feed, idx, fetchDetails]);
 
-  // drag/tap
   const cardRef = useRef<HTMLDivElement | null>(null);
   const startX = useRef<number | null>(null);
   const startT = useRef<number>(0);
@@ -151,7 +151,6 @@ function GroupSwipeInner() {
     });
   }, []);
 
-  // tangentbord
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       const item = feedRef.current[indexRef.current];
@@ -205,9 +204,9 @@ function GroupSwipeInner() {
   }
 
   return (
-    <main className="p-6 max-w-xl mx-auto">
-      <h1 className="text-2xl font-semibold mb-1">Grupp-swipe</h1>
-      <p className="opacity-80 mb-4">Kod: <span className="font-mono">{code}</span></p>
+    <main className="mx-auto max-w-5xl p-6">
+      <h1 className="mb-1 text-2xl font-semibold">Grupp-swipe</h1>
+      <p className="mb-4 opacity-80">Kod: <span className="font-mono">{code}</span></p>
 
       {matchFound && (
         <div className="mb-4 rounded-lg border border-green-600 p-3">
@@ -220,88 +219,105 @@ function GroupSwipeInner() {
       {loading && <p>Laddar förslag…</p>}
 
       {!loading && current && (
-        <>
-          <div
-            className="[perspective:1000px] select-none cursor-grab active:cursor-grabbing"
-            style={{ touchAction: "pan-y" }}
-            onPointerDown={onPointerDown}
-            onPointerMove={onPointerMove}
-            onPointerUp={onPointerEnd}
-            onPointerCancel={onPointerEnd}
-          >
+        <div className="md:grid md:grid-cols-[minmax(0,1fr)_320px] md:gap-6">
+          {/* Kort (vänster) */}
+          <div>
             <div
-              ref={cardRef}
-              className="relative w-full overflow-hidden rounded-xl border shadow"
-              style={{ aspectRatio: "2 / 3" }}
+              className="[perspective:1000px] select-none cursor-grab active:cursor-grabbing"
+              style={{ touchAction: "pan-y" }}
+              onPointerDown={onPointerDown}
+              onPointerMove={onPointerMove}
+              onPointerUp={onPointerEnd}
+              onPointerCancel={onPointerEnd}
             >
               <div
-                className={`absolute inset-0 transition-transform duration-300 [transform-style:preserve-3d] ${flip ? "[transform:rotateY(180deg)]" : ""}`}
+                ref={cardRef}
+                className="relative w-full overflow-hidden rounded-xl border shadow"
+                style={{ aspectRatio: "2 / 3" }}
               >
-                {/* FRONT: poster + always-on overlay */}
-                <div className="absolute inset-0 [backface-visibility:hidden]">
-                  {details?.posterPath ? (
-                    <Image
-                      src={`https://image.tmdb.org/t/p/w780${details.posterPath}`}
-                      alt={details.title}
-                      fill
-                      sizes="(min-width: 768px) 640px, 100vw"
-                      className="object-cover"
-                      placeholder={details.blurDataURL ? "blur" : undefined}
-                      blurDataURL={details.blurDataURL || undefined}
-                      priority={idx === 0}
-                    />
-                  ) : (
-                    <div className="absolute inset-0 rounded-xl bg-[linear-gradient(90deg,rgba(255,255,255,0.06)_25%,rgba(255,255,255,0.12)_37%,rgba(255,255,255,0.06)_63%)] bg-[length:400%_100%] animate-[shimmer_1.2s_infinite]" />
-                  )}
+                <div
+                  className={`absolute inset-0 transition-transform duration-300 [transform-style:preserve-3d] ${flip ? "[transform:rotateY(180deg)]" : ""}`}
+                >
+                  {/* FRONT */}
+                  <div className="absolute inset-0 [backface-visibility:hidden]">
+                    {details?.posterPath ? (
+                      <Image
+                        src={`https://image.tmdb.org/t/p/w780${details.posterPath}`}
+                        alt={details.title}
+                        fill
+                        sizes="(min-width: 768px) 640px, 100vw"
+                        className="object-cover"
+                        placeholder={details.blurDataURL ? "blur" : undefined}
+                        blurDataURL={details.blurDataURL || undefined}
+                        priority={idx === 0}
+                      />
+                    ) : (
+                      <div className="absolute inset-0 rounded-xl bg-[linear-gradient(90deg,rgba(255,255,255,0.06)_25%,rgba(255,255,255,0.12)_37%,rgba(255,255,255,0.06)_63%)] bg-[length:400%_100%] animate-[shimmer_1.2s_infinite]" />
+                    )}
 
-                  <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-black/70 via-black/20 to-transparent p-3 text-white">
-                    <div className="flex items-end justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="truncate text-base font-semibold">
-                          {details?.title ?? (isRec(current) ? current.title : "")}
+                    <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-black/70 via-black/20 to-transparent p-3 text-white">
+                      <div className="flex items-end justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="truncate text-base font-semibold">
+                            {details?.title ?? (isRec(current) ? current.title : "")}
+                          </div>
+                          <div className="text-xs opacity-90">{details?.year ?? "—"}</div>
                         </div>
-                        <div className="text-xs opacity-90">{details?.year ?? "—"}</div>
+                        <div className="shrink-0 text-sm font-medium">★ {fmtRating(details?.voteAverage ?? null)}</div>
                       </div>
-                      <div className="shrink-0 text-sm font-medium">★ {fmtRating(details?.voteAverage ?? null)}</div>
                     </div>
                   </div>
-                </div>
 
-                {/* BACK: info + provider-chips */}
-                <div className="absolute inset-0 bg-black/55 p-4 text-white [backface-visibility:hidden] [transform:rotateY(180deg)]">
-                  {isRec(current) && (
-                    <>
-                      <div className="mb-1 text-lg font-semibold">
-                        {details?.title || current.title}{" "}
-                        {details?.year ? <span className="text-xs opacity-70">[{details.year}]</span> : null}
-                      </div>
-
-                      <div className="mb-3 mt-2 flex flex-wrap gap-2">
-                        {(current.matchedProviders.length ? current.matchedProviders : (current.unknown ? ["Okänd"] : []))
-                          .map((p) => (
-                            <span key={p} className="rounded-full border border-white/30 bg-white/10 px-2 py-1 text-xs">
-                              {p}
-                            </span>
-                          ))}
-                      </div>
-
-                      <p className="text-sm opacity-90">
-                        {details ? details.overview || "Ingen beskrivning." : "Laddar info…"}
-                      </p>
-                    </>
-                  )}
+                  {/* BACK */}
+                  <div className="absolute inset-0 bg-black/55 p-4 text-white [backface-visibility:hidden] [transform:rotateY(180deg)]">
+                    {isRec(current) && (
+                      <>
+                        <div className="mb-1 text-lg font-semibold">
+                          {details?.title || current.title}{" "}
+                          {details?.year ? <span className="text-xs opacity-70">[{details.year}]</span> : null}
+                        </div>
+                        <div className="mb-3 mt-2 flex flex-wrap gap-2">
+                          {(current.matchedProviders.length ? current.matchedProviders : (current.unknown ? ["Okänd"] : []))
+                            .map((p) => (
+                              <span key={p} className="rounded-full border border-white/30 bg-white/10 px-2 py-1 text-xs">
+                                {p}
+                              </span>
+                            ))}
+                        </div>
+                        <p className="text-sm opacity-90">
+                          {details ? details.overview || "Ingen beskrivning." : "Laddar info…"}
+                        </p>
+                      </>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
+
+            <ActionDock
+              onNope={() => decide("dislike")}
+              onInfo={() => setFlip(f => !f)}
+              onWatchlist={toggleWatch}
+              onLike={() => decide("like")}
+            />
           </div>
 
-          <ActionDock
-            onNope={() => decide("dislike")}
-            onInfo={() => setFlip(f => !f)}
-            onWatchlist={toggleWatch}
-            onLike={() => decide("like")}
-          />
-        </>
+          {/* InfoPanel (höger) */}
+          {isRec(current) && (
+            <InfoPanel
+              title={details?.title || current.title}
+              year={details?.year ?? null}
+              rating={details?.voteAverage ?? null}
+              overview={details?.overview}
+              providers={current.matchedProviders}
+              unknown={current.unknown}
+              onNope={() => decide("dislike")}
+              onLike={() => decide("like")}
+              onWatchlist={toggleWatch}
+              className="md:mt-1"
+            />
+          )}
+        </div>
       )}
 
       {!loading && !current && (
@@ -312,10 +328,7 @@ function GroupSwipeInner() {
       )}
 
       <style jsx>{`
-        @keyframes shimmer {
-          0% { background-position: 100% 0; }
-          100% { background-position: 0 0; }
-        }
+        @keyframes shimmer { 0% { background-position: 100% 0; } 100% { background-position: 0 0; } }
       `}</style>
     </main>
   );
