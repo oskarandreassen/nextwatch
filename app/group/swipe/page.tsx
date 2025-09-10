@@ -1,5 +1,6 @@
 "use client";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
+import { useSearchParams } from "next/navigation";
 
 type RecItem = {
   type: "rec";
@@ -23,12 +24,10 @@ function isRec(x: FeedItem): x is RecItem {
   return x.type === "rec";
 }
 
-export default function GroupSwipePage({
-  searchParams,
-}: {
-  searchParams?: { code?: string };
-}) {
-  const code = (searchParams?.code || "").toUpperCase();
+export default function GroupSwipePage() {
+  const sp = useSearchParams();
+  const code = (sp.get("code") || "").toUpperCase();
+
   const [loading, setLoading] = useState(true);
   const [feed, setFeed] = useState<FeedItem[]>([]);
   const [idx, setIdx] = useState(0);
@@ -39,6 +38,7 @@ export default function GroupSwipePage({
   useEffect(() => {
     let ignore = false;
     async function run() {
+      if (!code) return;
       setLoading(true);
       const r = await fetch(`/api/recs/group?code=${encodeURIComponent(code)}`, {
         cache: "no-store",
@@ -50,7 +50,7 @@ export default function GroupSwipePage({
         setLoading(false);
       }
     }
-    if (code) run();
+    run();
     return () => {
       ignore = true;
     };
@@ -72,11 +72,10 @@ export default function GroupSwipePage({
             tmdbId: item.tmdbId,
             mediaType: item.mediaType,
             decision, // "like" | "dislike"
-            // gruppkod behövs inte i DB (matchningen plockar alla medlemmars likes via group_members),
-            // men vi skickar med för ev. logging/telemetry i backend i framtiden.
-            groupCode: code,
+            groupCode: code, // för ev. loggning framåt
           }),
         });
+
         // Efter varje like: kolla match snabbt
         if (decision === "like") {
           const m = await fetch(`/api/group/match?code=${encodeURIComponent(code)}`, {
@@ -127,7 +126,9 @@ export default function GroupSwipePage({
     return (
       <main className="p-6 max-w-xl mx-auto">
         <h1 className="text-2xl font-semibold mb-2">Grupp-swipe</h1>
-        <p className="opacity-80">Saknar <code>?code=XXXXXX</code> i URL:en.</p>
+        <p className="opacity-80">
+          Saknar <code>?code=XXXXXX</code> i URL:en.
+        </p>
       </main>
     );
   }
@@ -135,12 +136,16 @@ export default function GroupSwipePage({
   return (
     <main className="p-6 max-w-xl mx-auto">
       <h1 className="text-2xl font-semibold mb-1">Grupp-swipe</h1>
-      <p className="opacity-80 mb-4">Kod: <span className="font-mono">{code}</span></p>
+      <p className="opacity-80 mb-4">
+        Kod: <span className="font-mono">{code}</span>
+      </p>
 
       {matchFound && (
         <div className="mb-4 rounded-lg border border-green-600 p-3">
           <strong>{matchFound}</strong>
-          <div className="text-sm opacity-80">Öppna matchlistan: <code>/group/match?code={code}</code></div>
+          <div className="text-sm opacity-80">
+            Öppna matchlistan: <code>/group/match?code={code}</code>
+          </div>
         </div>
       )}
 
@@ -149,7 +154,9 @@ export default function GroupSwipePage({
       {!loading && !current && (
         <div className="rounded-lg border p-4">
           <p className="mb-2">Slut på förslag nu.</p>
-          <a className="underline" href={`/group/match?code=${encodeURIComponent(code)}`}>Visa matchlista</a>
+          <a className="underline" href={`/group/match?code=${encodeURIComponent(code)}`}>
+            Visa matchlista
+          </a>
         </div>
       )}
 
@@ -157,9 +164,14 @@ export default function GroupSwipePage({
         <div className="rounded-xl border p-4">
           {isRec(current) ? (
             <>
-              <div className="text-lg font-medium">{current.title} <span className="opacity-70 text-sm">({current.mediaType})</span></div>
+              <div className="text-lg font-medium">
+                {current.title}{" "}
+                <span className="opacity-70 text-sm">({current.mediaType})</span>
+              </div>
               <div className="text-sm opacity-80 mb-4">
-                Providers: {current.matchedProviders.join(", ") || (current.unknown ? "okänt" : "—")}
+                Providers:{" "}
+                {current.matchedProviders.join(", ") ||
+                  (current.unknown ? "okänt" : "—")}
               </div>
 
               <div className="flex gap-2">
@@ -186,19 +198,23 @@ export default function GroupSwipePage({
                 </button>
               </div>
 
-              <div className="mt-3 text-sm opacity-70">
-                Kvar i stacken: {remaining}
-              </div>
+              <div className="mt-3 text-sm opacity-70">Kvar i stacken: {remaining}</div>
             </>
           ) : (
             <>
               <div className="text-lg font-medium">{current.headline}</div>
               <div className="opacity-80 mb-3">{current.body}</div>
-              <a className="px-4 py-2 rounded-xl border hover:bg-white/5 inline-block" href={current.href}>
+              <a
+                className="px-4 py-2 rounded-xl border hover:bg-white/5 inline-block"
+                href={current.href}
+              >
                 {current.cta}
               </a>
               <div className="mt-3">
-                <button className="text-sm underline opacity-80" onClick={() => setIdx((v) => v + 1)}>
+                <button
+                  className="text-sm underline opacity-80"
+                  onClick={() => setIdx((v) => v + 1)}
+                >
                   Fortsätt
                 </button>
               </div>
