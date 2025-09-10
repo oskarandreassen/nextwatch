@@ -68,6 +68,7 @@ async function discover(
   const d = (await r.json()) as DiscoverResp;
   return d.results ?? [];
 }
+
 async function providers(kind: "movie" | "tv", id: number, region: string): Promise<ProvidersSE> {
   const r = await fetch(`${TMDB}/${kind}/${id}/watch/providers`, {
     headers: H,
@@ -85,8 +86,10 @@ export async function GET(req: Request) {
       | "movie"
       | "tv"
       | "both";
-    const page = Number(url.searchParams.get("page") || "1");
+    const pageStart = Number(url.searchParams.get("page") || "1");
     const limit = Math.min(Number(url.searchParams.get("limit") || "30"), 150);
+    // Hur många TMDb-sidor vi max hämtar per media vid första laddning
+    const pagesToFetch = Math.min(Number(url.searchParams.get("pages") || "3"), 5);
 
     const c = await cookies();
     const uid = c.get("nw_uid")?.value;
@@ -103,40 +106,42 @@ export async function GET(req: Request) {
     const region = profile.region ?? "SE";
     const language = profile.locale ?? "sv-SE";
     const allowed = new Set(
-      (Array.isArray(profile.providers) ? (profile.providers as unknown as string[]) : [])
-        .map((s) => s.toLowerCase().replace(/\s+/g, " ").replace(/\+/g, "plus").trim())
+      (Array.isArray(profile.providers) ? (profile.providers as unknown as string[]) : []).map((s) =>
+        s.toLowerCase().replace(/\s+/g, " ").replace(/\+/g, "plus").trim()
+      )
     );
 
+    // Samla items över flera sidor tills vi når limit (eller tar slut)
     const items: Array<{
       id: number;
       title: string;
       mediaType: "movie" | "tv";
       popularity: number | null;
     }> = [];
-    if (media === "movie" || media === "both") {
-      const d = await discover("movie", page, language, region, certMax);
-      for (const r of d)
-        items.push({
-          id: r.id,
-          title: r.title ?? r.name ?? "",
-          mediaType: "movie",
-          popularity: r.popularity ?? null,
-        });
-    }
-    if (media === "tv" || media === "both") {
-      const d = await discover("tv", page, language, region, certMax);
-      for (const r of d)
-        items.push({
-          id: r.id,
-          title: r.title ?? r.name ?? "",
-          mediaType: "tv",
-          popularity: r.popularity ?? null,
-        });
+
+    async function collect(kind: "movie" | "tv") {
+      for (let p = pageStart; p < pageStart + pagesToFetch; p++) {
+        const d = await discover(kind, p, language, region, certMax);
+        for (const r of d) {
+          items.push({
+            id: r.id,
+            title: r.title ?? r.name ?? "",
+            mediaType: kind,
+            popularity: r.popularity ?? null,
+          });
+          if (items.length >= 300) return; // hård spärr så vi inte blir för stora
+        }
+      }
     }
 
-    const subset = items.slice(0, 80);
+    if (media === "movie" || media === "both") await collect("movie");
+    if (media === "tv" || media === "both") await collect("tv");
+
+    // behåll topp-N med högst popularity (stabil ordning)
+    items.sort((a, b) => (b.popularity ?? 0) - (a.popularity ?? 0));
+    const subset = items.slice(0, 160); // processa max 160 för provider-calls
+
     const recs: RecItem[] = [];
-
     for (let i = 0; i < subset.length && recs.length < limit; i += 8) {
       const batch = subset.slice(i, i + 8);
       const provs = await Promise.all(batch.map((it) => providers(it.mediaType, it.id, region)));
@@ -144,11 +149,12 @@ export async function GET(req: Request) {
         const it = batch[j];
         const se = provs[j];
         const names = (se?.flatrate ?? []).map((p) => p.provider_name);
-        const norm = names
-          .map((n) => n.toLowerCase().replace(/\s+/g, " ").replace(/\+/g, "plus").trim());
+        const norm = names.map((n) =>
+          n.toLowerCase().replace(/\s+/g, " ").replace(/\+/g, "plus").trim()
+        );
         const unknown = !se || !se.flatrate;
         const has = allowed.size > 0 ? norm.some((n) => allowed.has(n)) : norm.length > 0;
-        if (has)
+        if (has) {
           recs.push({
             type: "rec",
             tmdbId: it.id,
@@ -157,10 +163,11 @@ export async function GET(req: Request) {
             matchedProviders: names,
             unknown,
           });
+        }
       }
     }
 
-    // ads i gratis
+    // annonser i free
     const hasLifetime = (user?.plan ?? "free") === "lifetime";
     const adEvery = 12;
     const feed: FeedItem[] = [];
@@ -183,7 +190,19 @@ export async function GET(req: Request) {
       });
     }
 
-    return NextResponse.json({ ok: true, count: feed.length, hasLifetime, certMax, feed });
+    // ge enkel hint om ev. nästa sida för framtida infinite scroll
+    const nextPage =
+      recs.length < limit ? pageStart + pagesToFetch : pageStart + pagesToFetch; // placeholder för framtiden
+
+    return NextResponse.json({
+      ok: true,
+      count: feed.length,
+      hasLifetime,
+      certMax,
+      page: pageStart,
+      nextPage,
+      feed,
+    });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return NextResponse.json({ ok: false, error: msg }, { status: 500 });
