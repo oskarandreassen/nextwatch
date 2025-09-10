@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import type { NavItem } from "../../lib/nav";
+import type { NavItem } from "../../../lib/nav";
 import { NAV } from "../../../lib/nav";
 import clsx from "clsx";
 
