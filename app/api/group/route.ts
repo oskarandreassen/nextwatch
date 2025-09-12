@@ -16,7 +16,7 @@ export async function GET(req: Request) {
     const code = new URL(req.url).searchParams.get("code")?.toUpperCase() ?? null;
     if (!code) return NextResponse.json({ ok: false, error: "Missing ?code" }, { status: 400 });
 
-    // Prisma model är singular => prisma.group
+    // Prisma model är singular: prisma.group
     const group = await prisma.group.findUnique({ where: { code } });
     if (!group) return NextResponse.json({ ok: false, error: "Group not found" }, { status: 404 });
 
@@ -26,12 +26,9 @@ export async function GET(req: Request) {
   }
 }
 
-/** POST /api/group  Body: { name?: string } */
-export async function POST(req: Request) {
+/** POST /api/group  Body: {} */
+export async function POST(_req: Request) {
   try {
-    const body = await req.json().catch(() => ({}));
-    const name = typeof body?.name === "string" && body.name.trim() ? body.name.trim() : null;
-
     // generera unik kod (försök några gånger)
     let code = genCode();
     for (let i = 0; i < 5; i++) {
@@ -40,7 +37,9 @@ export async function POST(req: Request) {
       code = genCode();
     }
 
-    const group = await prisma.group.create({ data: { code, name } });
+    // OBS: Din Group-modell har inget "name" → skapa endast med code
+    const group = await prisma.group.create({ data: { code } });
+
     return NextResponse.json({ ok: true, group }, { status: 201 });
   } catch (err) {
     return NextResponse.json({ ok: false, error: (err as Error).message }, { status: 500 });

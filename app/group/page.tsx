@@ -6,38 +6,14 @@ import { useState, useTransition } from "react";
 
 export const dynamic = "force-dynamic";
 
-// --- Types & type guards (inga any) ---
-type ApiGroup = {
-  code: string;
-  name?: string | null;
-  id?: string | number;
-  createdAt?: string;
-};
-
-type ApiCreateGroupOk = { ok: true; group: ApiGroup };
-type ApiError = { ok: false; error: string };
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null;
-}
-
-function isApiError(v: unknown): v is ApiError {
-  return isRecord(v) && v.ok === false && typeof v.error === "string";
-}
-
-function isApiCreateGroupOk(v: unknown): v is ApiCreateGroupOk {
-  return (
-    isRecord(v) &&
-    v.ok === true &&
-    isRecord(v.group) &&
-    typeof v.group.code === "string"
-  );
-}
+type ApiGroup = { code: string };
+type ApiCreateOk = { ok: true; group: ApiGroup };
+type ApiErr = { ok: false; error: string };
+const isRec = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null;
 
 export default function GroupPage() {
   const router = useRouter();
   const [codeInput, setCodeInput] = useState("");
-  const [nameInput, setNameInput] = useState("");
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
@@ -45,29 +21,19 @@ export default function GroupPage() {
     setError(null);
     startTransition(async () => {
       try {
-        const res = await fetch("/api/group", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: nameInput || undefined }),
-        });
-
+        const res = await fetch("/api/group", { method: "POST" });
         const data: unknown = await res.json();
 
-        if (isApiError(data)) {
-          throw new Error(data.error);
-        }
-        if (!res.ok) {
-          throw new Error(`HTTP ${res.status}`);
-        }
-        if (!isApiCreateGroupOk(data)) {
+        if (isRec(data) && data.ok === false) throw new Error(String((data as ApiErr).error));
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        if (!(isRec(data) && data.ok === true && isRec((data as ApiCreateOk).group) && typeof (data as ApiCreateOk).group.code === "string")) {
           throw new Error("Malformed response from /api/group");
         }
 
-        const code = data.group.code;
+        const code = (data as ApiCreateOk).group.code;
         router.push(`/group/swipe?code=${encodeURIComponent(code)}`);
       } catch (e) {
-        const msg = e instanceof Error ? e.message : "Failed to create group";
-        setError(msg);
+        setError(e instanceof Error ? e.message : "Failed to create group");
       }
     });
   };
@@ -85,33 +51,17 @@ export default function GroupPage() {
   return (
     <main className="mx-auto w-full max-w-3xl p-6">
       <h1 className="text-2xl font-semibold">Groups</h1>
-      <p className="mt-2 text-sm text-neutral-500">
-        Create or join a group and start swiping together.
-      </p>
+      <p className="mt-2 text-sm text-neutral-500">Create or join a group and start swiping together.</p>
 
       {error && (
-        <div className="mt-4 rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-700">
-          {error}
-        </div>
+        <div className="mt-4 rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-700">{error}</div>
       )}
 
       <section className="mt-6 grid gap-6 md:grid-cols-2">
         {/* Create */}
         <div className="rounded-lg border border-neutral-200 p-4">
           <h2 className="text-lg font-medium">Create a new group</h2>
-          <p className="mt-1 text-sm text-neutral-500">
-            You&apos;ll get a short code you can share with friends.
-          </p>
-
-          <label className="mt-4 block text-sm font-medium">Name (optional)</label>
-          <input
-            className="mt-1 w-full rounded-md border border-neutral-300 px-3 py-2"
-            placeholder="e.g., Friday Movie Night"
-            value={nameInput}
-            onChange={(e) => setNameInput(e.target.value)}
-            aria-label="Group name"
-          />
-
+          <p className="mt-1 text-sm text-neutral-500">You&apos;ll get a short code you can share with friends.</p>
           <button
             className="mt-4 w-full rounded-md border border-neutral-300 px-3 py-2 disabled:opacity-60"
             onClick={onCreate}
@@ -124,9 +74,7 @@ export default function GroupPage() {
         {/* Join */}
         <div className="rounded-lg border border-neutral-200 p-4">
           <h2 className="text-lg font-medium">Join with code</h2>
-          <p className="mt-1 text-sm text-neutral-500">
-            Ask your friend for the 6-character group code.
-          </p>
+          <p className="mt-1 text-sm text-neutral-500">Ask your friend for the 6-character group code.</p>
 
           <label className="mt-4 block text-sm font-medium">Group code</label>
           <input
