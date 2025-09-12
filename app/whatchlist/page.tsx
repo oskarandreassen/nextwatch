@@ -65,7 +65,7 @@ export default function WatchlistPage() {
       }
     })();
     return () => { ignore = true; };
-  }, []);
+  }, [details]);
 
   async function remove(it: WLRow) {
     await fetch("/api/watchlist/toggle", {

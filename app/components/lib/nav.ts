@@ -1,13 +1,8 @@
-export type NavItem = {
-  href: string;
-  label: string;
-  icon: string; // lucide icon name string we render in Sidebar/BottomTabs
-};
-
-export const NAV: NavItem[] = [
-  { href: "/swipe",      label: "Recommendations", icon: "Flame" },
-  { href: "/group",      label: "Grupp",           icon: "Users" },
-  { href: "/discover",   label: "Discover",        icon: "Search" },
-  { href: "/watchlist",  label: "Watchlist",       icon: "Bookmark" },
-  { href: "/profile",    label: "Profil",          icon: "User" },
+// components/lib/nav.ts
+export const navItems = [
+  { href: "/swipe", label: "Recommendations", short: "Recommendations", activeStartsWith: "/swipe" },
+  { href: "/group", label: "Group", short: "Group", activeStartsWith: "/group" },
+  { href: "/discover", label: "Discover", short: "Discover", activeStartsWith: "/discover" },
+  { href: "/watchlist", label: "Watchlist", short: "Watch", activeStartsWith: "/watchlist" },
+  { href: "/profile", label: "Profile", short: "Profile", activeStartsWith: "/profile" },
 ];

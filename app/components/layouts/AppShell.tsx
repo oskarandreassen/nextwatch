@@ -1,19 +1,24 @@
-"use client";
+// components/layouts/AppShell.tsx
+import Sidebar from "@/components/navigation/Sidebar";
+import BottomTabs from "@/components/navigation/BottomTabs";
 
-import type { PropsWithChildren } from "react";
-import Sidebar from "../navigation/Sidebar";
-import BottomTabs from "../navigation/BottomTabs";
-
-export default function AppShell({ children }: PropsWithChildren) {
+export default function AppShell({ children }: { children: React.ReactNode }) {
   return (
-    <div className="min-h-dvh bg-black text-white">
-      <div className="mx-auto grid w-full max-w-6xl md:grid-cols-[240px_1fr]">
+    <div className="flex min-h-dvh">
+      {/* Desktop sidebar */}
+      <aside className="hidden w-64 shrink-0 border-r border-neutral-200 bg-white md:block">
         <Sidebar />
-        <main className="min-h-dvh pb-[calc(64px+env(safe-area-inset-bottom))] md:pb-0">
-          {children}
-        </main>
+      </aside>
+
+      {/* Main content */}
+      <div className="flex min-h-dvh flex-1 flex-col">
+        <main className="flex-1">{children}</main>
+
+        {/* Mobile tabs */}
+        <nav className="md:hidden">
+          <BottomTabs />
+        </nav>
       </div>
-      <BottomTabs />
     </div>
   );
 }

@@ -1,46 +1,31 @@
+// components/navigation/BottomTabs.tsx
 "use client";
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import type { NavItem } from "../../../lib/nav";
-import { NAV } from "../../../lib/nav";
-import clsx from "clsx";
+import { navItems } from "@/components/lib/nav";
 
-type Props = { className?: string };
-
-export default function BottomTabs({ className }: Props) {
+export default function BottomTabs() {
   const pathname = usePathname();
-
   return (
-    <nav
-      className={clsx(
-        "fixed inset-x-0 bottom-0 z-40 md:hidden",
-        "pb-[max(12px,env(safe-area-inset-bottom))] pt-2",
-        "backdrop-blur bg-black/60 border-t border-white/10",
-        className
-      )}
-      role="navigation"
-      aria-label="Huvudnavigation"
-    >
-      <ul className="mx-auto grid max-w-xl grid-cols-5 gap-1 px-3">
-        {NAV.map((item: NavItem) => {
-          const active = pathname === item.href || pathname?.startsWith(item.href + "/");
+    <div className="sticky bottom-0 z-20 border-t border-neutral-200 bg-white">
+      <div className="mx-auto grid max-w-3xl grid-cols-5">
+        {navItems.map((item) => {
+          const active = pathname === item.href || pathname.startsWith(item.activeStartsWith ?? "///nope");
           return (
-            <li key={item.href} className="flex">
-              <Link
-                href={item.href}
-                className={clsx(
-                  "flex w-full flex-col items-center justify-center rounded-xl py-2 text-xs",
-                  active ? "bg-white/10 text-white" : "text-white/80 hover:bg-white/5"
-                )}
-              >
-                <item.Icon className="h-5 w-5 mb-1" aria-hidden />
-                <span className="leading-none">{item.label}</span>
-              </Link>
-            </li>
+            <Link
+              key={item.href}
+              href={item.href}
+              className={[
+                "flex items-center justify-center px-2 py-3 text-xs",
+                active ? "font-semibold text-neutral-900" : "text-neutral-600",
+              ].join(" ")}
+            >
+              {item.short ?? item.label}
+            </Link>
           );
         })}
-      </ul>
-    </nav>
+      </div>
+    </div>
   );
 }
