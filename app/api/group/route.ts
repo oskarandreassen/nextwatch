@@ -16,7 +16,8 @@ export async function GET(req: Request) {
     const code = new URL(req.url).searchParams.get("code")?.toUpperCase() ?? null;
     if (!code) return NextResponse.json({ ok: false, error: "Missing ?code" }, { status: 400 });
 
-    const group = await prisma.groups.findUnique({ where: { code } });
+    // Prisma model är singular => prisma.group
+    const group = await prisma.group.findUnique({ where: { code } });
     if (!group) return NextResponse.json({ ok: false, error: "Group not found" }, { status: 404 });
 
     return NextResponse.json({ ok: true, group }, { status: 200 });
@@ -34,12 +35,12 @@ export async function POST(req: Request) {
     // generera unik kod (försök några gånger)
     let code = genCode();
     for (let i = 0; i < 5; i++) {
-      const exists = await prisma.groups.findUnique({ where: { code } });
+      const exists = await prisma.group.findUnique({ where: { code } });
       if (!exists) break;
       code = genCode();
     }
 
-    const group = await prisma.groups.create({ data: { code, name } });
+    const group = await prisma.group.create({ data: { code, name } });
     return NextResponse.json({ ok: true, group }, { status: 201 });
   } catch (err) {
     return NextResponse.json({ ok: false, error: (err as Error).message }, { status: 500 });
