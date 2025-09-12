@@ -22,12 +22,17 @@ export default function GroupPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ name: nameInput || undefined }),
         });
-        const data = await res.json();
-        if (!res.ok || !data?.ok) throw new Error(data?.error || "Failed to create group");
-        const code = data.group?.code;
+        const data: unknown = await res.json();
+        const ok = typeof data === "object" && data !== null && (data as any).ok;
+        if (!res.ok || !ok) {
+          const msg = (data as any)?.error || "Failed to create group";
+          throw new Error(msg);
+        }
+        const code: string | undefined = (data as any)?.group?.code;
         if (code) router.push(`/group/swipe?code=${encodeURIComponent(code)}`);
-      } catch (e: any) {
-        setError(e?.message || "Failed to create group");
+      } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : "Failed to create group";
+        setError(msg);
       }
     });
   };
@@ -45,23 +50,17 @@ export default function GroupPage() {
   return (
     <main className="mx-auto w-full max-w-3xl p-6">
       <h1 className="text-2xl font-semibold">Groups</h1>
-      <p className="mt-2 text-sm text-neutral-500">
-        Create or join a group and start swiping together.
-      </p>
+      <p className="mt-2 text-sm text-neutral-500">Create or join a group and start swiping together.</p>
 
       {error && (
-        <div className="mt-4 rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-700">
-          {error}
-        </div>
+        <div className="mt-4 rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-700">{error}</div>
       )}
 
       <section className="mt-6 grid gap-6 md:grid-cols-2">
         {/* Create */}
         <div className="rounded-lg border border-neutral-200 p-4">
           <h2 className="text-lg font-medium">Create a new group</h2>
-          <p className="mt-1 text-sm text-neutral-500">
-            You&apos;ll get a short code you can share with friends.
-          </p>
+          <p className="mt-1 text-sm text-neutral-500">You&apos;ll get a short code you can share with friends.</p>
 
           <label className="mt-4 block text-sm font-medium">Name (optional)</label>
           <input
@@ -84,9 +83,7 @@ export default function GroupPage() {
         {/* Join */}
         <div className="rounded-lg border border-neutral-200 p-4">
           <h2 className="text-lg font-medium">Join with code</h2>
-          <p className="mt-1 text-sm text-neutral-500">
-            Ask your friend for the 6-character group code.
-          </p>
+          <p className="mt-1 text-sm text-neutral-500">Ask your friend for the 6-character group code.</p>
 
           <label className="mt-4 block text-sm font-medium">Group code</label>
           <input

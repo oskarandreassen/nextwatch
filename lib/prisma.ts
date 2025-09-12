@@ -1,11 +1,18 @@
+// lib/prisma.ts
 import { PrismaClient } from "@prisma/client";
 
-const globalForPrisma = global as unknown as { prisma?: PrismaClient };
+const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
 
-export const prisma =
-  globalForPrisma.prisma ??
-  new PrismaClient({
-    log: process.env.NODE_ENV === "development" ? ["query", "error", "warn"] : ["error"],
+// Named export (ifall något i koden använder { prisma })
+export const prisma: PrismaClient =
+  globalForPrisma.prisma ?? new PrismaClient({
+    // log: ["query"], // slå på vid behov
   });
 
-if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;
+// Default export (så import prisma from "..." funkar)
+export default prisma;
+
+// Cache klienten i dev för att undvika många instanser vid HMR
+if (process.env.NODE_ENV !== "production") {
+  globalForPrisma.prisma = prisma;
+}
