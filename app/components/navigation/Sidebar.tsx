@@ -3,14 +3,14 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { navItems } from "../lib/nav"; // relativ import inom app/components
+import { navItems } from "../lib/nav";
 
 export default function Sidebar() {
   const pathname = usePathname();
   return (
-    <div className="flex h-dvh flex-col p-4">
-      <div className="px-2 py-3 text-lg font-semibold">NextWatch</div>
-      <div className="mt-2 space-y-1">
+    <div className="flex h-dvh flex-col">
+      <div className="px-4 py-4 text-lg font-semibold text-white/90">NextWatch</div>
+      <div className="flex-1 space-y-1 px-2">
         {navItems.map((item) => {
           const active = pathname === item.href || pathname.startsWith(item.activeStartsWith ?? "///nope");
           return (
@@ -19,7 +19,9 @@ export default function Sidebar() {
               href={item.href}
               className={[
                 "block rounded-md px-3 py-2 text-sm",
-                active ? "bg-neutral-900 text-white" : "text-neutral-700 hover:bg-neutral-100",
+                active
+                  ? "bg-white text-neutral-900"
+                  : "text-neutral-300 hover:bg-neutral-800 hover:text-white",
               ].join(" ")}
             >
               {item.label}
@@ -27,6 +29,7 @@ export default function Sidebar() {
           );
         })}
       </div>
+      <div className="px-4 py-3 text-xs text-neutral-500">© NextWatch</div>
     </div>
   );
 }

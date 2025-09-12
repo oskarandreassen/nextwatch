@@ -40,6 +40,8 @@ model Profile {
   updatedAt         DateTime @default(now())     @map("updated_at")
 
   user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  displayName       String?  @map("display_name")
+
 
   @@map("profiles")
 }
