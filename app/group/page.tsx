@@ -1,91 +1,32 @@
-import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
-import { prisma } from "../../lib/prisma";
-
-export const runtime = "nodejs";
+// app/group/page.tsx
 export const dynamic = "force-dynamic";
 
-type Ok = {
-  ok: true;
-  id: number;
-  mediaType: "movie" | "tv";
-  title: string;
-  overview: string;
-  posterUrl: string | null;
-  posterPath: string | null;
-  year: string | null;
-  voteAverage: number | null;
-  voteCount: number | null;
-  blurDataURL: string | null;
-};
-type Err = { ok: false; error: string };
+export default function GroupPage() {
+  // Håll denna fil ren från HTTP-handlers (GET/POST) – sådant hör hemma i app/group/route.ts
+  return (
+    <main className="mx-auto w-full max-w-3xl p-6">
+      <h1 className="text-2xl font-semibold">Groups</h1>
+      <p className="mt-2 text-sm text-neutral-500">
+        Create or join a group and start swiping together.
+      </p>
 
-const TMDB = "https://api.themoviedb.org/3";
-const H = { Authorization: `Bearer ${process.env.TMDB_V4_TOKEN!}` };
+      {/* Placeholder-UI — behåll/ersätt med ditt befintliga innehåll */}
+      <section className="mt-6 space-y-4 rounded-lg border border-neutral-200 p-4">
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <input
+            className="flex-1 rounded-md border border-neutral-300 px-3 py-2"
+            placeholder="Enter group code (e.g., ABC123)"
+            aria-label="Group code"
+          />
+          <button className="mt-2 rounded-md border border-neutral-300 px-3 py-2 sm:mt-0">
+            Join
+          </button>
+        </div>
 
-function yearFrom(d?: string | null): string | null {
-  if (!d) return null;
-  const y = d.slice(0, 4);
-  return /^\d{4}$/.test(y) ? y : null;
-}
-const BLUR_1x1 =
-  "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
-
-export async function GET(req: Request) {
-  try {
-    const url = new URL(req.url);
-    const type = (url.searchParams.get("type") || "").toLowerCase() as "movie" | "tv";
-    const id = Number(url.searchParams.get("id") || "");
-    if (!id || (type !== "movie" && type !== "tv")) {
-      return NextResponse.json<Err>({ ok: false, error: "invalid params" }, { status: 400 });
-    }
-
-    // Default region/language; read from profile if present
-    let language = "sv-SE";
-    let region = "SE";
-    const c = await cookies();
-    const uid = c.get("nw_uid")?.value;
-    if (uid) {
-      const p = await prisma.profile.findUnique({ where: { userId: uid } });
-      if (p?.locale) language = p.locale;
-      if (p?.region) region = p.region;
-    }
-
-    const qs = new URLSearchParams({ language, region });
-    const r = await fetch(`${TMDB}/${type}/${id}?${qs}`, { headers: H, next: { revalidate: 600 } });
-    if (!r.ok) {
-      return NextResponse.json<Err>({ ok: false, error: `TMDb ${r.status}` }, { status: 500 });
-    }
-    const j = (await r.json()) as {
-      id: number;
-      title?: string;
-      name?: string;
-      overview?: string;
-      poster_path?: string | null;
-      vote_average?: number | null;
-      vote_count?: number | null;
-      release_date?: string | null;
-      first_air_date?: string | null;
-    };
-
-    const title = j.title ?? j.name ?? "";
-    const posterPath = j.poster_path ?? null;
-    const payload: Ok = {
-      ok: true,
-      id: j.id,
-      mediaType: type,
-      title,
-      overview: j.overview ?? "",
-      posterUrl: posterPath ? `https://image.tmdb.org/t/p/original${posterPath}` : null,
-      posterPath,
-      year: type === "movie" ? yearFrom(j.release_date) : yearFrom(j.first_air_date),
-      voteAverage: j.vote_average ?? null,
-      voteCount: j.vote_count ?? null,
-      blurDataURL: BLUR_1x1,
-    };
-    return NextResponse.json(payload);
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    return NextResponse.json<Err>({ ok: false, error: msg }, { status: 500 });
-  }
+        <div className="text-sm text-neutral-500">
+          Tip: Share your code with friends so you can find a match together.
+        </div>
+      </section>
+    </main>
+  );
 }
