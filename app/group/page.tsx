@@ -1,25 +1,12 @@
-"use client";
+import { NextResponse } from "next/server";
+import { cookies } from "next/headers";
+import { prisma } from "../../lib/prisma";
 
-import React, { Suspense, useCallback, useEffect, useRef, useState } from "react";
-import { useSearchParams } from "next/navigation";
-import Image from "next/image";
-import AppShell from "../components/layouts/AppShell";
-import ActionDock from "../components/ui/ActionDock";
-
+export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-type RecItem = {
-  type: "rec";
-  tmdbId: number;
-  mediaType: "movie" | "tv";
-  title: string;
-  matchedProviders: string[];
-  unknown: boolean;
-};
-type AdItem = { type: "ad"; id: string; headline: string; body: string; cta: string; href: string };
-type FeedItem = RecItem | AdItem;
-
-type Details = {
+type Ok = {
+  ok: true;
   id: number;
   mediaType: "movie" | "tv";
   title: string;
@@ -31,327 +18,74 @@ type Details = {
   voteCount: number | null;
   blurDataURL: string | null;
 };
-type ApiDetailsOk = Details & { ok: true };
-type ApiDetailsErr = { ok: false; error: string };
+type Err = { ok: false; error: string };
 
-function isRec(x: FeedItem): x is RecItem { return x.type === "rec"; }
-function fmtRating(v: number | null): string { return v == null ? "–" : (Math.round(v * 10) / 10).toFixed(1); }
-function vibrate(ms: number) {
-  if (typeof navigator !== "undefined") {
-    const nav = navigator as Navigator & { vibrate?: (pattern: number | number[]) => boolean };
-    nav.vibrate?.(ms);
-  }
+const TMDB = "https://api.themoviedb.org/3";
+const H = { Authorization: `Bearer ${process.env.TMDB_V4_TOKEN!}` };
+
+function yearFrom(d?: string | null): string | null {
+  if (!d) return null;
+  const y = d.slice(0, 4);
+  return /^\d{4}$/.test(y) ? y : null;
 }
+const BLUR_1x1 =
+  "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
 
-function GroupSwipeInner() {
-  const sp = useSearchParams();
-  const code = (sp.get("code") || "").toUpperCase();
-
-  const [loading, setLoading] = useState(true);
-  const [feed, setFeed] = useState<FeedItem[]>([]);
-  const [idx, setIdx] = useState(0);
-  const [flip, setFlip] = useState(false);
-  const [matchFound, setMatchFound] = useState<string | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const [animLock, setAnimLock] = useState<false | "left" | "right">(false);
-
-  const [detailsMap, setDetailsMap] = useState<Record<string, Details>>({});
-  const feedRef = useRef<FeedItem[]>([]);
-  const indexRef = useRef(0);
-  const detailsRef = useRef<Record<string, Details>>({});
-
-  useEffect(() => { feedRef.current = feed; }, [feed]);
-  useEffect(() => { indexRef.current = idx; }, [idx]);
-  useEffect(() => { detailsRef.current = detailsMap; }, [detailsMap]);
-
-  useEffect(() => {
-    let ignore = false;
-    (async () => {
-      if (!code) { setLoading(false); return; }
-      setLoading(true);
-      try {
-        const r = await fetch(`/api/recs/group?code=${encodeURIComponent(code)}`, { cache: "no-store" });
-        const j = await r.json();
-        if (ignore) return;
-        if (j?.ok) {
-          setFeed(j.feed as FeedItem[]);
-          setIdx(0);
-          setFlip(false);
-          setErr(null);
-        } else {
-          setErr(j?.error || "Fel");
-        }
-      } catch (e) {
-        if (!ignore) setErr(String(e));
-      } finally {
-        if (!ignore) setLoading(false);
-      }
-    })();
-    return () => { ignore = true; };
-  }, [code]);
-
-  const fetchDetails = useCallback(async (type: "movie" | "tv", id: number, cache: RequestCache) => {
-    const key = `${type}:${id}`;
-    if (detailsRef.current[key]) return;
-    try {
-      const r = await fetch(`/api/tmdb/details?type=${type}&id=${id}`, { cache });
-      const js = (await r.json()) as ApiDetailsOk | ApiDetailsErr;
-      if (!js.ok) return;
-      setDetailsMap(prev => ({ ...prev, [`${js.mediaType}:${js.id}`]: js }));
-    } catch { /* ignore */ }
-  }, []);
-
-  useEffect(() => {
-    const cur = feed[idx];
-    if (cur && isRec(cur)) fetchDetails(cur.mediaType, cur.tmdbId, idx === 0 ? "no-store" : "force-cache");
-    const nxt = feed[idx + 1];
-    if (nxt && isRec(nxt)) fetchDetails(nxt.mediaType, nxt.tmdbId, "force-cache");
-  }, [feed, idx, fetchDetails]);
-
-  const cardRef = useRef<HTMLDivElement | null>(null);
-  const startX = useRef<number | null>(null);
-  const startT = useRef<number>(0);
-
-  const resetCard = useCallback(() => {
-    if (!cardRef.current) return;
-    const el = cardRef.current;
-    el.style.transition = "transform 180ms ease-out, opacity 180ms ease-out";
-    el.style.transform = "";
-    el.style.opacity = "1";
-  }, []);
-
-  const flyOut = useCallback((dir: "left" | "right") => {
-    if (!cardRef.current) return;
-    const el = cardRef.current;
-    setAnimLock(dir);
-    el.style.transition = "transform 220ms ease-in, opacity 220ms ease-in";
-    el.style.transform = dir === "right" ? "translateX(480px) rotate(16deg)" : "translateX(-480px) rotate(-16deg)";
-    el.style.opacity = "0.75";
-    window.setTimeout(() => {
-      setIdx(v => v + 1);
-      setFlip(false);
-      setAnimLock(false);
-      el.style.transition = "transform 0s, opacity 0s";
-      el.style.transform = "";
-      el.style.opacity = "1";
-    }, 220);
-  }, []);
-
-  const decide = useCallback(async (decision: "like" | "dislike") => {
-    const item = feedRef.current[indexRef.current];
-    if (!item || !isRec(item)) {
-      setIdx(v => v + 1);
-      setFlip(false);
-      return;
+export async function GET(req: Request) {
+  try {
+    const url = new URL(req.url);
+    const type = (url.searchParams.get("type") || "").toLowerCase() as "movie" | "tv";
+    const id = Number(url.searchParams.get("id") || "");
+    if (!id || (type !== "movie" && type !== "tv")) {
+      return NextResponse.json<Err>({ ok: false, error: "invalid params" }, { status: 400 });
     }
-    if (decision === "like") { vibrate(12); flyOut("right"); }
-    else { vibrate(10); flyOut("left"); }
 
-    try {
-      await fetch("/api/rate", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ tmdbId: item.tmdbId, mediaType: item.mediaType, decision, groupCode: code }),
-      });
-      if (decision === "like") {
-        const m = await fetch(`/api/group/match?code=${encodeURIComponent(code)}`, { cache: "no-store" });
-        const j = await m.json();
-        if (j?.ok && Array.isArray(j.matches) && j.matches.length > 0) {
-          setMatchFound(`Match! ${j.matches.length} träff(ar) för grupp ${code}`);
-        }
-      }
-    } catch { /* ignore */ }
-  }, [code, flyOut]);
+    // Default region/language; read from profile if present
+    let language = "sv-SE";
+    let region = "SE";
+    const c = await cookies();
+    const uid = c.get("nw_uid")?.value;
+    if (uid) {
+      const p = await prisma.profile.findUnique({ where: { userId: uid } });
+      if (p?.locale) language = p.locale;
+      if (p?.region) region = p.region;
+    }
 
-  const toggleWatch = useCallback(async () => {
-    const item = feedRef.current[indexRef.current];
-    if (!item || !isRec(item)) return;
-    vibrate(20);
-    await fetch("/api/watchlist/toggle", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ tmdbId: item.tmdbId, mediaType: item.mediaType }),
-    });
-  }, []);
-
-  useEffect(() => {
-    const key = (e: KeyboardEvent) => {
-      const item = feedRef.current[indexRef.current];
-      if (!item) return;
-      if (e.key === "ArrowLeft" && !animLock) decide("dislike");
-      else if (e.key === "ArrowRight" && !animLock) decide("like");
-      else if (e.key === "ArrowUp") toggleWatch();
-      else if (e.key === " ") setFlip(f => !f);
+    const qs = new URLSearchParams({ language, region });
+    const r = await fetch(`${TMDB}/${type}/${id}?${qs}`, { headers: H, next: { revalidate: 600 } });
+    if (!r.ok) {
+      return NextResponse.json<Err>({ ok: false, error: `TMDb ${r.status}` }, { status: 500 });
+    }
+    const j = (await r.json()) as {
+      id: number;
+      title?: string;
+      name?: string;
+      overview?: string;
+      poster_path?: string | null;
+      vote_average?: number | null;
+      vote_count?: number | null;
+      release_date?: string | null;
+      first_air_date?: string | null;
     };
-    window.addEventListener("keydown", key);
-    return () => window.removeEventListener("keydown", key);
-  }, [decide, toggleWatch, animLock]);
 
-  const onPointerDown = useCallback((e: React.PointerEvent) => {
-    if (animLock) return;
-    startX.current = e.clientX;
-    startT.current = e.timeStamp;
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
-    if (cardRef.current) cardRef.current.style.transition = "transform 0s";
-  }, [animLock]);
-  const onPointerMove = useCallback((e: React.PointerEvent) => {
-    if (startX.current == null || !cardRef.current || animLock) return;
-    const dx = e.clientX - startX.current;
-    cardRef.current.style.transform = `translateX(${dx}px) rotate(${dx / 20}deg)`;
-  }, [animLock]);
-  const onPointerEnd = useCallback((e: React.PointerEvent) => {
-    const sx = startX.current;
-    startX.current = null;
-    (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
-    if (sx == null || animLock) return;
-
-    const dx = e.clientX - sx;
-    const dt = e.timeStamp - startT.current;
-    const isTap = Math.abs(dx) < 10 && dt < 300;
-
-    if (isTap) { setFlip(f => !f); resetCard(); return; }
-    if (dx > 120) { decide("like"); return; }
-    if (dx < -120) { decide("dislike"); return; }
-    resetCard();
-  }, [decide, resetCard, animLock]);
-
-  const current = feed[idx];
-  const details = current && isRec(current) ? detailsMap[`${current.mediaType}:${current.tmdbId}`] : undefined;
-
-  const nextItem = feed[idx + 1];
-  const dNext = nextItem && isRec(nextItem) ? detailsMap[`${nextItem.mediaType}:${nextItem.tmdbId}`] : undefined;
-
-  if (!code) {
-    return (
-      <main className="p-6 max-w-xl mx-auto">
-        <h1 className="text-2xl font-semibold mb-2">Grupp-swipe</h1>
-        <p className="opacity-80">Saknar <code>?code=XXXXXX</code> i URL:en.</p>
-      </main>
-    );
+    const title = j.title ?? j.name ?? "";
+    const posterPath = j.poster_path ?? null;
+    const payload: Ok = {
+      ok: true,
+      id: j.id,
+      mediaType: type,
+      title,
+      overview: j.overview ?? "",
+      posterUrl: posterPath ? `https://image.tmdb.org/t/p/original${posterPath}` : null,
+      posterPath,
+      year: type === "movie" ? yearFrom(j.release_date) : yearFrom(j.first_air_date),
+      voteAverage: j.vote_average ?? null,
+      voteCount: j.vote_count ?? null,
+      blurDataURL: BLUR_1x1,
+    };
+    return NextResponse.json(payload);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return NextResponse.json<Err>({ ok: false, error: msg }, { status: 500 });
   }
-
-  return (
-    <main className="mx-auto max-w-xl p-6">
-      <h1 className="mb-1 text-2xl font-semibold">Grupp-swipe</h1>
-      <p className="mb-4 opacity-80">Kod: <span className="font-mono">{code}</span></p>
-
-      {matchFound && (
-        <div className="mb-4 rounded-lg border border-green-600 p-3">
-          <strong>{matchFound}</strong>
-          <div className="text-sm opacity-80">Öppna matchlistan: <code>/group/match?code={code}</code></div>
-        </div>
-      )}
-
-      {err && <div className="mb-4 text-red-500">{err}</div>}
-      {loading && <p>Laddar förslag…</p>}
-
-      {!loading && current && isRec(current) && (
-        <>
-          <div
-            className="[perspective:1000px] select-none cursor-grab active:cursor-grabbing"
-            style={{ touchAction: "pan-y" }}
-            onPointerDown={onPointerDown}
-            onPointerMove={onPointerMove}
-            onPointerUp={onPointerEnd}
-            onPointerCancel={onPointerEnd}
-          >
-            <div className="relative w-full" style={{ aspectRatio: "2 / 3" }}>
-              {/* next preview (hidden while flipping) */}
-              <div
-                className="absolute inset-0 z-0 overflow-hidden rounded-xl border shadow"
-                style={{ transform: "translateY(12px) scale(0.96)", opacity: 0.9, visibility: flip ? "hidden" : "visible" }}
-                aria-hidden
-              >
-                {dNext?.posterPath ? (
-                  <Image
-                    src={`https://image.tmdb.org/t/p/w500${dNext.posterPath}`}
-                    alt={dNext.title}
-                    fill
-                    sizes="(min-width: 768px) 640px, 100vw"
-                    className="object-cover"
-                    placeholder={dNext.blurDataURL ? "blur" : undefined}
-                    blurDataURL={dNext.blurDataURL || undefined}
-                  />
-                ) : (
-                  <div className="absolute inset-0 rounded-xl bg-[linear-gradient(90deg,rgba(255,255,255,0.06)_25%,rgba(255,255,255,0.12)_37%,rgba(255,255,255,0.06)_63%)] bg-[length:400%_100%] animate-[shimmer_1.2s_infinite]" />
-                )}
-              </div>
-
-              {/* active card (opaque) */}
-              <div ref={cardRef} className="absolute inset-0 z-10 overflow-hidden rounded-xl border shadow bg-black">
-                <div className={`absolute inset-0 transition-transform duration-300 [transform-style:preserve-3d] ${flip ? "[transform:rotateY(180deg)]" : ""}`}>
-                  {/* FRONT */}
-                  <div className="absolute inset-0 [backface-visibility:hidden]">
-                    {details?.posterPath ? (
-                      <Image
-                        src={`https://image.tmdb.org/t/p/w780${details.posterPath}`}
-                        alt={details.title}
-                        fill
-                        sizes="(min-width: 768px) 640px, 100vw"
-                        className="object-cover"
-                        placeholder={details.blurDataURL ? "blur" : undefined}
-                        blurDataURL={details.blurDataURL || undefined}
-                        priority={idx === 0}
-                      />
-                    ) : (
-                      <div className="absolute inset-0 rounded-xl bg-[linear-gradient(90deg,rgba(255,255,255,0.06)_25%,rgba(255,255,255,0.12)_37%,rgba(255,255,255,0.06)_63%)] bg-[length:400%_100%] animate-[shimmer_1.2s_infinite]" />
-                    )}
-                    <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-black/70 via-black/20 to-transparent p-3 text-white">
-                      <div className="flex items-end justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="truncate text-base font-semibold">{details?.title ?? current.title}</div>
-                          <div className="text-xs opacity-90">{details?.year ?? "—"}</div>
-                        </div>
-                        <div className="shrink-0 text-sm font-medium">★ {fmtRating(details?.voteAverage ?? null)}</div>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* BACK */}
-                  <div className="absolute inset-0 bg-black p-4 text-white [backface-visibility:hidden] [transform:rotateY(180deg)]">
-                    <div className="mb-1 text-lg font-semibold">
-                      {details?.title || current.title} {details?.year ? <span className="text-xs opacity-70">[{details.year}]</span> : null}
-                    </div>
-                    <div className="mb-3 mt-2 flex flex-wrap gap-2">
-                      {(current.matchedProviders.length ? current.matchedProviders : (current.unknown ? ["Okänd"] : []))
-                        .map((p) => (
-                          <span key={p} className="rounded-full border border-white/30 bg-white/10 px-2 py-1 text-xs">{p}</span>
-                        ))}
-                    </div>
-                    <p className="text-sm opacity-90">{details ? details.overview || "Ingen beskrivning." : "Laddar info…"}</p>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <ActionDock
-            onNope={() => decide("dislike")}
-            onInfo={() => setFlip(f => !f)}
-            onWatchlist={toggleWatch}
-            onLike={() => decide("like")}
-          />
-        </>
-      )}
-
-      {!loading && !current && (
-        <div className="rounded-lg border p-4">
-          <p className="mb-2">Slut på förslag nu.</p>
-          <a className="underline" href={`/group/match?code=${encodeURIComponent(code)}`}>Visa matchlista</a>
-        </div>
-      )}
-
-      <style jsx>{`@keyframes shimmer { 0% { background-position: 100% 0; } 100% { background-position: 0 0; } }`}</style>
-    </main>
-  );
-}
-
-export default function GroupSwipePage() {
-  return (
-    <Suspense fallback={<main className="p-6 max-w-xl mx-auto">Laddar…</main>}>
-      <AppShell>
-        <GroupSwipeInner />
-      </AppShell>
-    </Suspense>
-  );
 }

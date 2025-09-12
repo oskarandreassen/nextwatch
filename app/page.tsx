@@ -1,66 +1,57 @@
-"use client";
+import Link from "next/link";
 
-import { useRouter } from "next/navigation";
-import { useState } from "react";
+export const dynamic = "force-static";
 
-export default function LandingPage() {
-  const r = useRouter();
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  async function start() {
-    try {
-      setBusy(true);
-      setErr(null);
-      const res = await fetch("/api/session/init", { method: "POST" });
-      if (!res.ok) throw new Error("Kunde inte initiera session.");
-      r.push("/onboarding");
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  }
-
+export default function HomePage() {
   return (
-    <main className="min-h-dvh bg-black text-white">
-      <div className="mx-auto max-w-3xl p-6">
-        <header className="py-6">
-          <div className="text-xl font-semibold">nextwatch</div>
-        </header>
+    <main className="mx-auto max-w-5xl px-6 py-16">
+      <header className="mb-12">
+        <div className="text-3xl font-black tracking-tight">nextwatch</div>
+      </header>
 
-        <section className="mt-10 grid gap-6 md:grid-cols-2">
-          <div>
-            <h1 className="text-4xl font-bold leading-tight">Hitta något att se – snabbare.</h1>
-            <p className="mt-4 text-white/80">
-              Svep igenom smarta rekommendationer baserat på dina streamingtjänster.
-              Skapa en grupp och få träff när ni alla gillar samma titel.
-            </p>
-            <div className="mt-6 flex gap-3">
-              <button
-                onClick={start}
-                disabled={busy}
-                className="rounded-xl border border-white/20 bg-white/10 px-5 py-3 hover:bg-white/15 disabled:opacity-60"
-              >
-                {busy ? "Startar…" : "Kom igång gratis"}
-              </button>
-              <a href="/swipe" className="rounded-xl border border-white/20 px-5 py-3 hover:bg-white/5">
-                Hoppa direkt till svep
-              </a>
-            </div>
-            {err && <p className="mt-3 text-sm text-red-400">{err}</p>}
-          </div>
+      <section className="mx-auto max-w-3xl rounded-2xl border border-white/10 bg-white/[0.03] p-8 text-center">
+        <h1 className="mb-3 text-4xl font-extrabold tracking-tight">Hitta något att se — snabbt.</h1>
+        <p className="mx-auto mb-6 max-w-2xl text-lg opacity-85">
+          Personliga rekommendationer baserat på din region, ditt språk och dina streamingtjänster.
+          Svep som i Tinder, skapa grupper och få träffar när alla gillar samma titel.
+        </p>
 
-          <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-            <ul className="space-y-3 text-sm text-white/90">
-              <li>✔ Personliga förslag (region/ålder/provider)</li>
-              <li>✔ Grupp-swipe med auto-match</li>
-              <li>✔ Watchlist</li>
-              <li>✔ Premium: inga annonser och större grupper</li>
-            </ul>
-          </div>
-        </section>
-      </div>
+        <div className="flex flex-wrap items-center justify-center gap-3">
+          <Link
+            href="/onboarding"
+            className="rounded-lg border border-white/20 bg-white/10 px-5 py-2.5 font-medium hover:bg-white/15"
+          >
+            Kom igång
+          </Link>
+          <Link
+            href="/swipe"
+            className="rounded-lg border border-white/15 px-5 py-2.5 hover:bg-white/5"
+          >
+            Gå till Recommendations
+          </Link>
+          <Link
+            href="/group"
+            className="rounded-lg border border-white/15 px-5 py-2.5 hover:bg-white/5"
+          >
+            Skapa en grupp
+          </Link>
+        </div>
+      </section>
+
+      <section className="mx-auto mt-12 grid max-w-4xl grid-cols-1 gap-4 sm:grid-cols-3">
+        <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
+          <div className="mb-1 text-sm font-semibold opacity-80">Tinder-likt svep</div>
+          <p className="text-sm opacity-80">Vänster/ höger för nej/ja, upp för watchlist, info på baksidan av kortet.</p>
+        </div>
+        <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
+          <div className="mb-1 text-sm font-semibold opacity-80">Grupper</div>
+          <p className="text-sm opacity-80">Dela kod och få träff när minst två (eller 60%) gillar samma titel.</p>
+        </div>
+        <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
+          <div className="mb-1 text-sm font-semibold opacity-80">Filtrerat för dig</div>
+          <p className="text-sm opacity-80">Region, språk och streamingtjänster styr urvalet automatiskt.</p>
+        </div>
+      </section>
     </main>
   );
 }
