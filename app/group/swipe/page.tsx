@@ -282,7 +282,7 @@ function GroupSwipeInner() {
             <button className="px-4 py-2 rounded-xl border" onClick={() => decide("dislike")}>Nej (←)</button>
             <button className="px-4 py-2 rounded-xl border" onClick={() => setFlip(f => !f)}>Info</button>
             <button className="px-4 py-2 rounded-xl border" onClick={() => decide("like")}>Ja (→)</button>
-            <button className="px-4 py-2 rounded-xl border" onClick={toggleWatch}>Watchlist (↑)</button>
+            <button className="px-4 py-2 rounded-xl border" onClick={toggleWatch}>watchlist (↑)</button>
           </div>
         </>
       )}

@@ -22,7 +22,7 @@ function fmtRating(x: number | null): string {
   return `${(Math.round(x * 10) / 10).toFixed(1)}`;
 }
 
-export default function WatchlistPage() {
+export default function watchlistPage() {
   const [items, setItems] = useState<Item[]>([]);
   const [details, setDetails] = useState<Record<string, Details>>({});
   const [err, setErr] = useState<string | null>(null);
@@ -66,7 +66,7 @@ export default function WatchlistPage() {
 
   return (
     <main className="max-w-5xl mx-auto p-6">
-      <h1 className="text-2xl font-semibold mb-4">Watchlist</h1>
+      <h1 className="text-2xl font-semibold mb-4">watchlist</h1>
       {items.length === 0 ? (
         <div className="opacity-80">Inget sparat ännu.</div>
       ) : (

@@ -330,14 +330,14 @@ function SwipeInner() {
           <ActionDock
             onNope={() => decide("dislike")}
             onInfo={() => setFlip(f => !f)}
-            onWatchlist={toggleWatch}
+            onwatchlist={toggleWatch}
             onLike={() => decide("like")}
           />
         </>
       )}
 
       <div className="mt-4 text-sm opacity-70">
-        Tips: Tap/klick för att vända. ←/→ Nej/Ja, ↑ Watchlist, Space vänd.
+        Tips: Tap/klick för att vända. ←/→ Nej/Ja, ↑ watchlist, Space vänd.
       </div>
 
       <style jsx>{`@keyframes shimmer { 0% { background-position: 100% 0 } 100% { background-position: 0 0 } }`}</style>

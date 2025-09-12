@@ -12,7 +12,7 @@ type Props = {
   className?: string;
   onNope: () => void;
   onLike: () => void;
-  onWatchlist: () => void;
+  onwatchlist: () => void;
 };
 
 function fmtRating(v: number | null): string {
@@ -29,7 +29,7 @@ export default function InfoPanel({
   unknown,
   onNope,
   onLike,
-  onWatchlist,
+  onwatchlist,
   className,
 }: Props) {
   const chips = providers.length ? providers : (unknown ? ["Okänd"] : []);
@@ -70,10 +70,10 @@ export default function InfoPanel({
           Nej
         </button>
         <button
-          onClick={onWatchlist}
+          onClick={onwatchlist}
           className="rounded-xl border border-violet-500/40 bg-violet-600/20 py-2 text-sm hover:bg-violet-600/30"
         >
-          Watchlist
+          watchlist
         </button>
         <button
           onClick={onLike}

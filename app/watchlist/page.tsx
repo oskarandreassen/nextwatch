@@ -25,7 +25,7 @@ function fmtRating(v: number | null) {
   return (Math.round(v * 10) / 10).toFixed(1);
 }
 
-export default function WatchlistPage() {
+export default function watchlistPage() {
   const [rows, setRows] = useState<WLRow[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -133,7 +133,7 @@ export default function WatchlistPage() {
   return (
     <AppShell>
       <main className="mx-auto max-w-6xl p-6">
-        <h1 className="mb-3 text-2xl font-semibold">Watchlist</h1>
+        <h1 className="mb-3 text-2xl font-semibold">watchlist</h1>
         {busy && <div className="mb-3 opacity-80">Laddar…</div>}
         {err && <div className="mb-3 text-red-400">{err}</div>}
         {rows.length === 0 && !busy ? (

@@ -6,7 +6,7 @@ import clsx from "clsx";
 type Props = {
   onNope: () => void;
   onInfo: () => void;
-  onWatchlist: () => void;
+  onwatchlist: () => void;
   onLike: () => void;
   className?: string;
   disabled?: boolean;
@@ -54,7 +54,7 @@ function RoundBtn({
 export default function ActionDock({
   onNope,
   onInfo,
-  onWatchlist,
+  onwatchlist,
   onLike,
   className,
   disabled,
@@ -73,7 +73,7 @@ export default function ActionDock({
       <RoundBtn onClick={onInfo} title="Info" intent="info" disabled={disabled}>
         <Info className="h-7 w-7" />
       </RoundBtn>
-      <RoundBtn onClick={onWatchlist} title="Watchlist" intent="save" disabled={disabled}>
+      <RoundBtn onClick={onwatchlist} title="watchlist" intent="save" disabled={disabled}>
         <Bookmark className="h-7 w-7" />
       </RoundBtn>
       <RoundBtn onClick={onLike} title="Ja" intent="like" disabled={disabled}>

@@ -17,7 +17,7 @@ model User {
 
   profile    Profile?
   ratings    Rating[]
-  watchlist  Watchlist[]
+  watchlist  watchlist[]
   purchases  Purchase[]
 
   groupMembers GroupMember[] @relation("UserGroupMembers")
@@ -58,7 +58,7 @@ model Rating {
   @@map("ratings")
 }
 
-model Watchlist {
+model watchlist {
   id         String   @id
   userId     String   @map("user_id")
   tmdbId     Int      @map("tmdb_id")
