@@ -1,6 +1,6 @@
-// components/layouts/AppShell.tsx
-import Sidebar from "@/components/navigation/Sidebar";
-import BottomTabs from "@/components/navigation/BottomTabs";
+// app/components/layouts/AppShell.tsx
+import Sidebar from "../navigation/Sidebar";
+import BottomTabs from "../navigation/BottomTabs";
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   return (

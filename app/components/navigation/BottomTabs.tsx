@@ -1,9 +1,9 @@
-// components/navigation/BottomTabs.tsx
+// app/components/navigation/BottomTabs.tsx
 "use client";
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { navItems } from "@/components/lib/nav";
+import { navItems } from "../lib/nav";
 
 export default function BottomTabs() {
   const pathname = usePathname();

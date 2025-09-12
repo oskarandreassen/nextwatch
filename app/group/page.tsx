@@ -23,13 +23,9 @@ export default function GroupPage() {
           body: JSON.stringify({ name: nameInput || undefined }),
         });
         const data = await res.json();
-        if (!res.ok || !data?.ok) {
-          throw new Error(data?.error || "Failed to create group");
-        }
+        if (!res.ok || !data?.ok) throw new Error(data?.error || "Failed to create group");
         const code = data.group?.code;
-        if (code) {
-          router.push(`/group/swipe?code=${encodeURIComponent(code)}`);
-        }
+        if (code) router.push(`/group/swipe?code=${encodeURIComponent(code)}`);
       } catch (e: any) {
         setError(e?.message || "Failed to create group");
       }
@@ -102,10 +98,7 @@ export default function GroupPage() {
             maxLength={10}
           />
 
-          <button
-            className="mt-4 w-full rounded-md border border-neutral-300 px-3 py-2"
-            onClick={onJoin}
-          >
+          <button className="mt-4 w-full rounded-md border border-neutral-300 px-3 py-2" onClick={onJoin}>
             Join group
           </button>
         </div>

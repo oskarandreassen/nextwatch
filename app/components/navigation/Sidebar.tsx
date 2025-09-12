@@ -1,13 +1,12 @@
-// components/navigation/Sidebar.tsx
+// app/components/navigation/Sidebar.tsx
 "use client";
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { navItems } from "@/components/lib/nav";
+import { navItems } from "../lib/nav"; // relativ import inom app/components
 
 export default function Sidebar() {
   const pathname = usePathname();
-
   return (
     <div className="flex h-dvh flex-col p-4">
       <div className="px-2 py-3 text-lg font-semibold">NextWatch</div>

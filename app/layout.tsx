@@ -1,7 +1,7 @@
 // app/layout.tsx
 import type { Metadata } from "next";
 import "./globals.css";
-import AppShell from "@/components/layouts/AppShell";
+import AppShell from "./components/layouts/AppShell";
 
 export const metadata: Metadata = {
   title: "NextWatch",
