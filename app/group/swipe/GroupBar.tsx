@@ -20,17 +20,38 @@ export default function GroupBar({ code }: { code: string }) {
     return () => { if (timer) clearInterval(timer); };
   }, [code]);
 
+  const invite = async () => {
+    const url = `${location.origin}/group/swipe?code=${encodeURIComponent(code)}`;
+    try {
+      // försök system-share
+      // @ts-expect-error
+      if (navigator.share) {
+        // @ts-expect-error
+        await navigator.share({ title: "NextWatch group", text: `Join my group: ${code}`, url });
+      } else {
+        await navigator.clipboard.writeText(url);
+        alert("Länk kopierad till urklipp!");
+      }
+    } catch {
+      await navigator.clipboard.writeText(url);
+      alert("Länk kopierad till urklipp!");
+    }
+  };
+
   return (
     <div className="sticky top-0 z-20 border-b border-neutral-800 bg-neutral-900/80 backdrop-blur">
       <div className="mx-auto flex max-w-3xl items-center justify-between px-4 py-3">
         <div className="text-base font-semibold">Grupp: {code}</div>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2">
           {members.map((m) => (
-            <div key={m.userId} className="flex items-center gap-2 rounded-full bg-neutral-800 px-2 py-1 text-xs text-neutral-200">
+            <div key={m.userId} className="hidden items-center gap-2 rounded-full bg-neutral-800 px-2 py-1 text-xs text-neutral-200 sm:flex">
               <span className="flex h-6 w-6 items-center justify-center rounded-full bg-white text-neutral-900">{m.initials}</span>
-              <span className="hidden sm:block">{m.displayName}</span>
+              <span>{m.displayName}</span>
             </div>
           ))}
+          <button onClick={invite} className="rounded-md border border-neutral-700 px-3 py-1 text-xs text-neutral-200 hover:bg-neutral-800">
+            Bjud in
+          </button>
         </div>
       </div>
     </div>

@@ -3,6 +3,14 @@
 import { Heart, Info, X, Bookmark } from "lucide-react";
 import clsx from "clsx";
 
+
+import { notify } from "@/app/components/lib/notify"; // eller relativt beroende på filens plats
+// efter lyckad POST /api/watchlist/toggle → added:
+notify("Added to Watchlist");
+// om borttagen:
+notify("Removed from Watchlist");
+
+
 type Props = {
   onNope: () => void;
   onInfo: () => void;
