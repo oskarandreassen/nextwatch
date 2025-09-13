@@ -1,7 +1,10 @@
-// app/components/ui/Toast.tsx
 "use client";
 
 import { useEffect, useState } from "react";
+
+type VibratingNavigator = Navigator & {
+  vibrate?: (pattern: number | number[]) => boolean;
+};
 
 export default function Toast() {
   const [msg, setMsg] = useState<string | null>(null);
@@ -10,7 +13,9 @@ export default function Toast() {
     const on = (e: Event) => {
       const m = (e as CustomEvent<string>).detail;
       setMsg(m);
-      (navigator as any)?.vibrate?.(30);
+      if (typeof navigator !== "undefined") {
+        (navigator as VibratingNavigator).vibrate?.(30);
+      }
       setTimeout(() => setMsg(null), 1500);
     };
     window.addEventListener("app:toast", on as EventListener);

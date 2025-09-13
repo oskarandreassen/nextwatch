@@ -12,70 +12,103 @@ type Details = {
   type: MediaType;
   title: string;
   overview?: string | null;
-  poster?: string | null; // "/abc.jpg" eller full url
+  poster?: string | null;
   year?: number | null;
   rating?: number | null;
 };
 
 // ---- Hjälpare ----
-const THRESH_X = 80; // px för vänster/höger
-const THRESH_UP = 110; // px för upp (watchlist)
+const THRESH_X = 80;
+const THRESH_UP = 110;
 
 const toPoster = (p?: string | null, w: "w342" | "w500" | "w780" = "w780") =>
   !p ? null : p.startsWith("http") ? p : `https://image.tmdb.org/t/p/${w}${p}`;
 
+type VibratingNavigator = Navigator & {
+  vibrate?: (pattern: number | number[]) => boolean;
+};
+
 const vib = (ms = 24) => {
-  if (typeof navigator !== "undefined" && "vibrate" in navigator) {
-    (navigator as any).vibrate(ms);
+  if (typeof navigator !== "undefined") {
+    (navigator as VibratingNavigator).vibrate?.(ms);
   }
 };
 
 // ---- API ----
-async function fetchRecs(limit = 20, media: "movie" | "tv" | "both" = "both"): Promise<BaseItem[]> {
+async function fetchRecs(
+  limit = 20,
+  media: "movie" | "tv" | "both" = "both"
+): Promise<BaseItem[]> {
   const res = await fetch(`/api/recs/personal?media=${media}&limit=${limit}`, { cache: "no-store" });
   if (!res.ok) return [];
   const data = await res.json().catch(() => null);
-  // Normalisera inkommande — tillåt både {id,type} och andra namn
-  const raw = Array.isArray(data?.items) ? data.items : Array.isArray(data) ? data : [];
+  const raw: unknown[] = Array.isArray((data as any)?.items)
+    ? (data as any).items
+    : Array.isArray(data)
+    ? (data as unknown[])
+    : [];
+
   const mapped: BaseItem[] = raw
-    .map((x: any) => {
-      const id = Number(x?.id ?? x?.tmdbId ?? x?.tmdb_id);
-      const t: MediaType | undefined = (x?.type ?? x?.mediaType ?? x?.media_type) as MediaType;
-      if (!id || (t !== "movie" && t !== "tv")) return null;
-      return { id, type: t };
+    .map((x): BaseItem | null => {
+      if (typeof x !== "object" || x === null) return null;
+      const obj = x as Record<string, unknown>;
+      const idRaw = obj.id ?? obj.tmdbId ?? obj.tmdb_id;
+      const id =
+        typeof idRaw === "number"
+          ? idRaw
+          : typeof idRaw === "string"
+          ? Number(idRaw)
+          : NaN;
+
+      const tRaw = obj.type ?? obj.mediaType ?? obj.media_type;
+      const type: MediaType | undefined =
+        tRaw === "movie" || tRaw === "tv" ? (tRaw as MediaType) : undefined;
+
+      if (!Number.isFinite(id) || !type) return null;
+      return { id: id as number, type };
     })
-    .filter(Boolean);
-  return mapped as BaseItem[];
+    .filter((v): v is BaseItem => Boolean(v));
+  return mapped;
+}
+
+function detailsFromUnknown(d: unknown, fallbackType: MediaType): Details | null {
+  if (typeof d !== "object" || d === null) return null;
+  const o = d as Record<string, unknown>;
+
+  const id = typeof o.id === "number" ? o.id : undefined;
+  if (!id) return null;
+
+  const title =
+    (typeof o.title === "string" && o.title) ||
+    (typeof o.name === "string" && o.name) ||
+    "Untitled";
+
+  const tRaw = o.type;
+  const type: MediaType = tRaw === "movie" || tRaw === "tv" ? (tRaw as MediaType) : fallbackType;
+
+  const overview = typeof o.overview === "string" ? o.overview : null;
+  const poster =
+    (typeof o.poster === "string" && o.poster) ||
+    (typeof o.poster_path === "string" && o.poster_path) ||
+    null;
+  const year =
+    (typeof o.year === "number" && o.year) ||
+    (typeof o.releaseYear === "number" && o.releaseYear) ||
+    null;
+
+  let rating: number | null = null;
+  if (typeof o.rating === "number") rating = o.rating;
+  else if (typeof o.vote_average === "number") rating = o.vote_average as number;
+
+  return { id, type, title, overview, poster, year, rating };
 }
 
 async function fetchDetails(item: BaseItem): Promise<Details | null> {
   const res = await fetch(`/api/tmdb/details?type=${item.type}&id=${item.id}`, { cache: "force-cache" });
   if (!res.ok) return null;
-  const d = await res.json().catch(() => null);
-  if (!d?.ok) {
-    // vissa implementationer kan returnera direkt objektet
-    if (typeof d?.id === "number") {
-      return {
-        id: d.id,
-        type: (d.type ?? item.type) as MediaType,
-        title: d.title ?? d.name ?? "Untitled",
-        overview: d.overview ?? null,
-        poster: d.poster ?? d.poster_path ?? null,
-        year: d.year ?? d.releaseYear ?? null,
-        rating: typeof d.rating === "number" ? d.rating : d.vote_average ?? null,
-      };
-    }
-    return null;
-  }
-  return {
-    id: d.id,
-    type: (d.type ?? item.type) as MediaType,
-    title: d.title,
-    overview: d.overview ?? null,
-    poster: d.poster ?? null,
-    year: d.year ?? null,
-    rating: d.rating ?? null,
-  };
+  const d = (await res.json().catch(() => null)) as unknown;
+  // Oavsett form – extrahera
+  return detailsFromUnknown(d, item.type);
 }
 
 async function postRate(item: BaseItem, decision: "like" | "dislike") {
@@ -99,9 +132,8 @@ export default function SwipeLegacy() {
   const [queue, setQueue] = useState<BaseItem[]>([]);
   const [idx, setIdx] = useState(0);
 
-  // detailsCache låter oss förladdda current + next
   const detailsCache = useRef<Map<string, Details | null>>(new Map());
-  const [version, setVersion] = useState(0); // för att trigga rerender när cache uppdateras
+  const [, bump] = useState(0); // force rerender
 
   // drag state
   const start = useRef<{ x: number; y: number } | null>(null);
@@ -133,13 +165,13 @@ export default function SwipeLegacy() {
     want.forEach(async (it) => {
       const key = `${it.type}:${it.id}`;
       if (!detailsCache.current.has(key)) {
-        detailsCache.current.set(key, null); // lås medan laddar
+        detailsCache.current.set(key, null);
         const det = await fetchDetails(it);
         detailsCache.current.set(key, det);
-        setVersion((v) => v + 1);
+        bump((v) => v + 1);
       }
     });
-  }, [current, next]);
+  }, [current, next, bump]);
 
   const getDetails = (it?: BaseItem | null): Details | null => {
     if (!it) return null;
@@ -177,43 +209,45 @@ export default function SwipeLegacy() {
     resetDrag();
   };
 
-  const swipeLeft = async () => {
+  const swipeLeft = useCallback(async () => {
     if (!current) return;
     setLeaving("left");
     vib(18);
     await postRate(current, "dislike");
     setTimeout(advance, 160);
-  };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current, idx]);
 
-  const swipeRight = async () => {
+  const swipeRight = useCallback(async () => {
     if (!current) return;
     setLeaving("right");
     vib(26);
     await postRate(current, "like");
     setTimeout(advance, 160);
-  };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current, idx]);
 
-  const swipeUp = async () => {
+  const swipeUp = useCallback(async () => {
     if (!current) return;
     setLeaving("up");
     vib(26);
     await toggleWatchlist(current);
     notify("Added to Watchlist");
     setTimeout(advance, 160);
-  };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current, idx]);
 
   const onPointerUp = () => {
     if (!current) return resetDrag();
     if (dy < -THRESH_UP && Math.abs(dy) > Math.abs(dx)) {
-      return swipeUp();
+      return void swipeUp();
     }
     if (dx > THRESH_X) {
-      return swipeRight(); // HÖGER = LIKE
+      return void swipeRight(); // HÖGER = LIKE
     }
     if (dx < -THRESH_X) {
-      return swipeLeft(); // VÄNSTER = NOPE
+      return void swipeLeft(); // VÄNSTER = NOPE
     }
-    // annars: reset
     resetDrag();
   };
 
@@ -239,8 +273,7 @@ export default function SwipeLegacy() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [current, idx]);
+  }, [current, swipeLeft, swipeRight, swipeUp]);
 
   // ----- Renderhjälp -----
   const transform = useMemo(() => {
@@ -255,12 +288,11 @@ export default function SwipeLegacy() {
   const miniPoster = toPoster(nextDetails?.poster, "w500");
 
   // ----- Actions för dockan -----
-  const onNope = useCallback(() => swipeLeft(), [current]);
-  const onLike = useCallback(() => swipeRight(), [current]);
-  const onWatch = useCallback(() => swipeUp(), [current]);
+  const onNope = useCallback(() => { void swipeLeft(); }, [swipeLeft]);
+  const onLike = useCallback(() => { void swipeRight(); }, [swipeRight]);
+  const onWatch = useCallback(() => { void swipeUp(); }, [swipeUp]);
   const onInfo = useCallback(() => setFlipped((f) => !f), []);
 
-  // ----- Empty state -----
   if (!current) {
     return (
       <div className="px-4 pb-28 pt-6 md:pb-8">
@@ -284,7 +316,7 @@ export default function SwipeLegacy() {
 
   return (
     <div className="pb-28 pt-3 md:pb-8">
-      {/* Mini-stack: topp ~12px av nästa kort, visas bara när inte flip pågår */}
+      {/* Mini-stack: topp ~12px av nästa kort */}
       {!flipped && next && miniPoster && (
         <div className="pointer-events-none mx-4 -mb-3 mt-2 rounded-[18px] border border-neutral-800/80 bg-black/50 shadow">
           <div className="relative h-3 overflow-hidden rounded-t-[18px]">
@@ -311,14 +343,11 @@ export default function SwipeLegacy() {
             "touch-none will-change-transform",
             "transition-[transform,opacity] duration-150 ease-out",
           ].join(" ")}
-          style={{
-            transform,
-          }}
+          style={{ transform }}
         >
           {/* FRONT */}
           {!flipped && (
             <div className="relative overflow-hidden rounded-[22px]">
-              {/* svart bakplan hindrar bleed-through */}
               <div className="absolute inset-0 bg-black" />
               {poster ? (
                 <img
@@ -329,7 +358,6 @@ export default function SwipeLegacy() {
               ) : (
                 <div className="relative z-[1] aspect-[2/3] w-full rounded-[22px] bg-neutral-800" />
               )}
-              {/* front overlay: titel + metadata */}
               <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[2] rounded-b-[22px] bg-gradient-to-t from-black/85 via-black/20 to-transparent p-4">
                 <div className="text-xl font-semibold text-white">
                   {curDetails?.title ?? "Untitled"}
@@ -353,7 +381,6 @@ export default function SwipeLegacy() {
                 <div className="text-sm text-neutral-300">
                   {curDetails?.overview || "Ingen beskrivning."}
                 </div>
-                {/* Här kan du lägga providers-chippar senare */}
               </div>
             </div>
           )}
@@ -366,12 +393,7 @@ export default function SwipeLegacy() {
       </div>
 
       {/* Tinder-dockan */}
-      <ActionDock
-        onNope={onNope}
-        onInfo={onInfo}
-        onWatchlist={onWatch}
-        onLike={onLike}
-      />
+      <ActionDock onNope={onNope} onInfo={onInfo} onWatchlist={onWatch} onLike={onLike} />
     </div>
   );
 }

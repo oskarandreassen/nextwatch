@@ -1,7 +1,10 @@
-// app/components/ui/ActionDock.tsx
 "use client";
 
 import { X, Info, Bookmark, Heart } from "lucide-react";
+
+type VibratingNavigator = Navigator & {
+  vibrate?: (pattern: number | number[]) => boolean;
+};
 
 type Props = {
   onNope: () => void;
@@ -12,8 +15,8 @@ type Props = {
 };
 
 function vib(ms = 30) {
-  if (typeof navigator !== "undefined" && "vibrate" in navigator) {
-    (navigator as any).vibrate(ms);
+  if (typeof navigator !== "undefined") {
+    (navigator as VibratingNavigator).vibrate?.(ms);
   }
 }
 
