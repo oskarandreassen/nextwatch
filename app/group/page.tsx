@@ -1,9 +1,13 @@
 // app/group/page.tsx
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 type Friend = { userId: string; displayName: string; initials: string };
+
+type ShareCapableNavigator = Navigator & {
+  share?: (data: { title?: string; text?: string; url?: string }) => Promise<void>;
+};
 
 async function createGroup(): Promise<string | null> {
   const res = await fetch("/api/group", { method: "POST" });
@@ -27,7 +31,9 @@ export default function GroupPage() {
       if (!alive) return;
       if (data?.ok && Array.isArray(data.friends)) setFriends(data.friends);
     })();
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+    };
   }, [tab]);
 
   const goToCode = () => {
@@ -43,7 +49,8 @@ export default function GroupPage() {
     else alert("Kunde inte skapa grupp.");
   };
 
-  const inviteLink = (c: string) => `${location.origin}/group/swipe?code=${encodeURIComponent(c)}`;
+  const inviteLink = (c: string) =>
+    `${location.origin}/group/swipe?code=${encodeURIComponent(c)}`;
 
   return (
     <main className="mx-auto w-full max-w-3xl px-4 py-6">
@@ -99,11 +106,16 @@ export default function GroupPage() {
         <div className="rounded-xl border border-neutral-800 bg-neutral-900 p-4">
           <div className="mb-3 text-lg font-medium">Your friends</div>
           {friends.length === 0 ? (
-            <div className="text-sm text-neutral-400">Inga vänner än – gå med i en grupp först.</div>
+            <div className="text-sm text-neutral-400">
+              Inga vänner än – gå med i en grupp först.
+            </div>
           ) : (
             <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               {friends.map((f) => (
-                <li key={f.userId} className="flex items-center justify-between rounded-lg border border-neutral-800 bg-neutral-950 px-3 py-2">
+                <li
+                  key={f.userId}
+                  className="flex items-center justify-between rounded-lg border border-neutral-800 bg-neutral-950 px-3 py-2"
+                >
                   <div className="flex items-center gap-2">
                     <span className="flex h-7 w-7 items-center justify-center rounded-full bg-white text-xs font-semibold text-neutral-900">
                       {f.initials}
@@ -114,12 +126,15 @@ export default function GroupPage() {
                     className="rounded-md border border-neutral-700 px-2 py-1 text-xs text-neutral-200 hover:bg-neutral-800"
                     onClick={async () => {
                       const code = await createGroup();
-                      if (!code) { alert("Kunde inte skapa grupp."); return; }
+                      if (!code) {
+                        alert("Kunde inte skapa grupp.");
+                        return;
+                      }
                       const link = inviteLink(code);
                       try {
-                        // Web Share om finns
-                        if ("share" in navigator && typeof (navigator as any).share === "function") {
-                          await (navigator as any).share({
+                        const n = navigator as ShareCapableNavigator;
+                        if (typeof n.share === "function") {
+                          await n.share({
                             title: "NextWatch group",
                             text: `Join my group: ${code}`,
                             url: link,
@@ -129,13 +144,15 @@ export default function GroupPage() {
                           alert("Invite copied!");
                         } else {
                           const ta = document.createElement("textarea");
-                          ta.value = link; document.body.appendChild(ta); ta.select();
-                          document.execCommand("copy"); document.body.removeChild(ta);
+                          ta.value = link;
+                          document.body.appendChild(ta);
+                          ta.select();
+                          document.execCommand("copy");
+                          document.body.removeChild(ta);
                           alert("Invite copied!");
                         }
-                        // gå direkt till gruppen man skapade
-                        location.href = `/group/swipe?code=${encodeURIComponent(code)}`;
-                      } catch {
+                      } finally {
+                        // Gå till gruppen direkt
                         location.href = `/group/swipe?code=${encodeURIComponent(code)}`;
                       }
                     }}
