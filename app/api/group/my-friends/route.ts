@@ -8,8 +8,12 @@ export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {
-    const uid = cookies().get("nw_uid")?.value;
-    if (!uid) return NextResponse.json({ ok: false, error: "No session" }, { status: 401 });
+    // Next 15: cookies() är asynkron
+    const cookieStore = await cookies();
+    const uid = cookieStore.get("nw_uid")?.value;
+    if (!uid) {
+      return NextResponse.json({ ok: false, error: "No session" }, { status: 401 });
+    }
 
     // Hitta alla grupper där jag är medlem
     const myMemberships = await prisma.groupMember.findMany({
@@ -25,22 +29,31 @@ export async function GET() {
       include: { user: true },
     });
 
-    const byId = new Map<string, { userId: string; displayName: string; initials: string }>();
+    const byId = new Map<
+      string,
+      { userId: string; displayName: string; initials: string }
+    >();
+
     for (const m of others) {
       const email = m.user.email ?? "";
-      const displayBase = email ? email.split("@")[0] : `User-${m.userId.slice(0, 6)}`;
-      const displayName = displayBase.charAt(0).toUpperCase() + displayBase.slice(1);
+      const base = email ? email.split("@")[0] : `User-${m.userId.slice(0, 6)}`;
+      const displayName = base.charAt(0).toUpperCase() + base.slice(1);
       const initials = displayName
         .split(/\s+/)
         .map((s) => s[0])
         .join("")
         .slice(0, 2)
         .toUpperCase();
-      if (!byId.has(m.userId)) byId.set(m.userId, { userId: m.userId, displayName, initials });
+      if (!byId.has(m.userId)) {
+        byId.set(m.userId, { userId: m.userId, displayName, initials });
+      }
     }
 
     return NextResponse.json({ ok: true, friends: Array.from(byId.values()) });
   } catch (err: unknown) {
-    return NextResponse.json({ ok: false, error: (err as Error).message }, { status: 500 });
+    return NextResponse.json(
+      { ok: false, error: (err as Error).message },
+      { status: 500 }
+    );
   }
 }
