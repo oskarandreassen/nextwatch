@@ -1,32 +1,31 @@
 // app/api/group/members/route.ts
 import { NextResponse } from "next/server";
-import prisma from "../../../../lib/prisma";
+import { prisma } from "../../../../lib/prisma";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
-  const code = new URL(req.url).searchParams.get("code")?.toUpperCase() || "";
-  if (!code) return NextResponse.json({ ok: false, error: "Missing ?code" }, { status: 400 });
+  const url = new URL(req.url);
+  const code = url.searchParams.get("code")?.trim().toUpperCase();
+  if (!code) return NextResponse.json({ ok: false, error: "missing code" }, { status: 400 });
 
   const members = await prisma.groupMember.findMany({
     where: { groupCode: code },
-    select: { userId: true, joinedAt: true, user: { select: { id: true } } },
+    select: { userId: true, joinedAt: true, user: { select: { profile: { select: { displayName: true } } } } },
     orderBy: { joinedAt: "asc" },
   });
 
-  const profiles = await prisma.profile.findMany({
-    where: { userId: { in: members.map((m) => m.userId) } },
-    select: { userId: true, displayName: true },
-  });
-  const map = new Map(profiles.map((p) => [p.userId, p.displayName || null]));
-
-  const list = members.map((m) => {
-    const name = map.get(m.userId);
-    return {
-      userId: m.userId,
-      displayName: name || `User ${m.userId.slice(0, 6)}`,
-      initials: (name || m.userId).split(/\s+/).map(s => s[0]?.toUpperCase() || "").join("").slice(0, 2),
-      joinedAt: m.joinedAt,
-    };
+  const enriched = members.map((m) => {
+    const displayName = m.user?.profile?.displayName || "User";
+    const initials =
+      displayName
+        .split(/\s+/)
+        .map((p) => p[0]?.toUpperCase() || "")
+        .join("")
+        .slice(0, 2) || "U";
+    return { userId: m.userId, joinedAt: m.joinedAt.toISOString(), displayName, initials };
   });
 
-  return NextResponse.json({ ok: true, members: list });
+  return NextResponse.json({ ok: true, code, members: enriched });
 }

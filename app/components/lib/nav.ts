@@ -1,8 +1,20 @@
 // app/components/lib/nav.ts
-export const navItems = [
-  { href: "/swipe", label: "Recommendations", short: "Recs", activeStartsWith: "/swipe" },
-  { href: "/group", label: "Group", short: "Group", activeStartsWith: "/group" },
-  { href: "/discover", label: "Discover", short: "Discover", activeStartsWith: "/discover" },
-  { href: "/watchlist", label: "watchlist", short: "Watch", activeStartsWith: "/watchlist" }, // byt till /watchlist när du rättat stavningen
-  { href: "/profile", label: "Profile", short: "Profile", activeStartsWith: "/profile" },
+import type { ComponentType, SVGProps } from "react";
+import { Home, Users, Compass, Bookmark, User } from "lucide-react";
+
+export type NavIcon = ComponentType<SVGProps<SVGSVGElement>>;
+export type NavItem = {
+  href: string;
+  label: string;
+  short: string;
+  icon: NavIcon;
+  activeStartsWith: string;
+};
+
+export const navItems: NavItem[] = [
+  { href: "/swipe",     label: "Recommendations", short: "Recs",   icon: Home,     activeStartsWith: "/swipe" },
+  { href: "/group",     label: "Group",           short: "Group",  icon: Users,    activeStartsWith: "/group" },
+  { href: "/discover",  label: "Discover",        short: "Discover", icon: Compass, activeStartsWith: "/discover" },
+  { href: "/watchlist", label: "Watchlist",       short: "Watch",  icon: Bookmark, activeStartsWith: "/watchlist" },
+  { href: "/profile",   label: "Profile",         short: "Profile",icon: User,     activeStartsWith: "/profile" },
 ];

@@ -7,21 +7,35 @@ import { navItems } from "../lib/nav";
 
 export default function BottomTabs() {
   const pathname = usePathname();
+
   return (
-    <div className="sticky bottom-0 z-20 border-t border-neutral-800 bg-neutral-900/80 backdrop-blur">
-      <div className="mx-auto grid max-w-3xl grid-cols-5">
+    <div className="sticky bottom-0 z-40 border-t border-neutral-800/80 bg-neutral-900/70 backdrop-blur">
+      <div className="mx-auto grid max-w-3xl grid-cols-5 gap-1 px-2 py-1 pb-[calc(env(safe-area-inset-bottom)+8px)]">
         {navItems.map((item) => {
-          const active = pathname === item.href || pathname.startsWith(item.activeStartsWith ?? "///nope");
+          const Icon = item.icon;
+          const active =
+            pathname === item.href || pathname.startsWith(item.activeStartsWith);
           return (
             <Link
               key={item.href}
               href={item.href}
-              className={[
-                "flex items-center justify-center px-2 py-3 text-xs",
-                active ? "font-semibold text-white" : "text-neutral-400",
-              ].join(" ")}
+              aria-label={item.label}
+              className="relative flex flex-col items-center justify-center gap-1 px-2 py-1 text-[11px]"
             >
-              {item.short ?? item.label}
+              <div
+                className={[
+                  "flex h-9 w-9 items-center justify-center rounded-full transition",
+                  active ? "bg-white text-neutral-900" : "text-neutral-300",
+                ].join(" ")}
+              >
+                <Icon className="h-5 w-5" />
+              </div>
+              <div className={active ? "font-medium text-white" : "text-neutral-400"}>
+                {item.short}
+              </div>
+              {active && (
+                <span className="absolute inset-x-6 -bottom-1 h-1 rounded-full bg-white/90" />
+              )}
             </Link>
           );
         })}

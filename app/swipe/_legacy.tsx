@@ -1,314 +1,377 @@
 "use client";
-import React, { Suspense, useCallback, useEffect, useRef, useState } from "react";
-import { useSearchParams } from "next/navigation";
-import Image from "next/image";
-import AppShell from "../components/layouts/AppShell";
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ActionDock from "../components/ui/ActionDock";
-export default function SwipePage() {
-  return (
-    <Suspense fallback={<div className="p-6">Laddar…</div>}>
-      <AppShell>
-        <SwipeInner />
-      </AppShell>
-    </Suspense>
-  );
-}
-type RecItem = {
-  type: "rec";
-  tmdbId: number;
-  mediaType: "movie" | "tv";
-  title: string;
-  matchedProviders: string[];
-  unknown: boolean;
-};
-type AdItem = { type: "ad"; id: string; headline: string; body: string; cta: string; href: string };
-type FeedItem = RecItem | AdItem;
+import { notify } from "../components/lib/notify";
+
+// ---- Typer ----
+type MediaType = "movie" | "tv";
+type BaseItem = { id: number; type: MediaType };
 type Details = {
   id: number;
-  mediaType: "movie" | "tv";
+  type: MediaType;
   title: string;
-  overview: string;
-  posterUrl: string | null;
-  posterPath: string | null;
-  year: string | null;
-  voteAverage: number | null;
-  voteCount: number | null;
-  blurDataURL: string | null;
+  overview?: string | null;
+  poster?: string | null; // "/abc.jpg" eller full url
+  year?: number | null;
+  rating?: number | null;
 };
-type ApiDetailsOk = Details & { ok: true };
-type ApiDetailsErr = { ok: false; error: string };
-function isRec(x: FeedItem | undefined): x is RecItem {
-  return !!x && x.type === "rec";
-}
-function fmtRating(v: number | null): string {
-  if (v == null) return "–";
-  return (Math.round(v * 10) / 10).toFixed(1);
-}
-function vibrate(ms: number) {
-  if (typeof navigator !== "undefined") {
-    const nav = navigator as Navigator & { vibrate?: (pattern: number | number[]) => boolean };
-    nav.vibrate?.(ms);
+
+// ---- Hjälpare ----
+const THRESH_X = 80; // px för vänster/höger
+const THRESH_UP = 110; // px för upp (watchlist)
+
+const toPoster = (p?: string | null, w: "w342" | "w500" | "w780" = "w780") =>
+  !p ? null : p.startsWith("http") ? p : `https://image.tmdb.org/t/p/${w}${p}`;
+
+const vib = (ms = 24) => {
+  if (typeof navigator !== "undefined" && "vibrate" in navigator) {
+    (navigator as any).vibrate(ms);
   }
+};
+
+// ---- API ----
+async function fetchRecs(limit = 20, media: "movie" | "tv" | "both" = "both"): Promise<BaseItem[]> {
+  const res = await fetch(`/api/recs/personal?media=${media}&limit=${limit}`, { cache: "no-store" });
+  if (!res.ok) return [];
+  const data = await res.json().catch(() => null);
+  // Normalisera inkommande — tillåt både {id,type} och andra namn
+  const raw = Array.isArray(data?.items) ? data.items : Array.isArray(data) ? data : [];
+  const mapped: BaseItem[] = raw
+    .map((x: any) => {
+      const id = Number(x?.id ?? x?.tmdbId ?? x?.tmdb_id);
+      const t: MediaType | undefined = (x?.type ?? x?.mediaType ?? x?.media_type) as MediaType;
+      if (!id || (t !== "movie" && t !== "tv")) return null;
+      return { id, type: t };
+    })
+    .filter(Boolean);
+  return mapped as BaseItem[];
 }
-function SwipeInner() {
-  const sp = useSearchParams();
-  const media = (sp?.get("media") || "both") as "movie" | "tv" | "both";
-  const [feed, setFeed] = useState<FeedItem[]>([]);
-  const [i, setI] = useState(0);
-  const [flip, setFlip] = useState(false);
-  const [err, setErr] = useState("");
-  const [animLock, setAnimLock] = useState<false | "left" | "right">(false);
-  const [detailsMap, setDetailsMap] = useState<Record<string, Details>>({});
-  const feedRef = useRef<FeedItem[]>([]);
-  const indexRef = useRef(0);
-  const detailsRef = useRef<Record<string, Details>>({});
-  useEffect(() => { feedRef.current = feed; }, [feed]);
-  useEffect(() => { indexRef.current = i; }, [i]);
-  useEffect(() => { detailsRef.current = detailsMap; }, [detailsMap]);
+
+async function fetchDetails(item: BaseItem): Promise<Details | null> {
+  const res = await fetch(`/api/tmdb/details?type=${item.type}&id=${item.id}`, { cache: "force-cache" });
+  if (!res.ok) return null;
+  const d = await res.json().catch(() => null);
+  if (!d?.ok) {
+    // vissa implementationer kan returnera direkt objektet
+    if (typeof d?.id === "number") {
+      return {
+        id: d.id,
+        type: (d.type ?? item.type) as MediaType,
+        title: d.title ?? d.name ?? "Untitled",
+        overview: d.overview ?? null,
+        poster: d.poster ?? d.poster_path ?? null,
+        year: d.year ?? d.releaseYear ?? null,
+        rating: typeof d.rating === "number" ? d.rating : d.vote_average ?? null,
+      };
+    }
+    return null;
+  }
+  return {
+    id: d.id,
+    type: (d.type ?? item.type) as MediaType,
+    title: d.title,
+    overview: d.overview ?? null,
+    poster: d.poster ?? null,
+    year: d.year ?? null,
+    rating: d.rating ?? null,
+  };
+}
+
+async function postRate(item: BaseItem, decision: "like" | "dislike") {
+  await fetch("/api/rate", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ id: item.id, type: item.type, decision }),
+  }).catch(() => {});
+}
+
+async function toggleWatchlist(item: BaseItem) {
+  await fetch("/api/watchlist/toggle", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ id: item.id, type: item.type }),
+  }).catch(() => {});
+}
+
+// ---- Komponent ----
+export default function SwipeLegacy() {
+  const [queue, setQueue] = useState<BaseItem[]>([]);
+  const [idx, setIdx] = useState(0);
+
+  // detailsCache låter oss förladdda current + next
+  const detailsCache = useRef<Map<string, Details | null>>(new Map());
+  const [version, setVersion] = useState(0); // för att trigga rerender när cache uppdateras
+
+  // drag state
+  const start = useRef<{ x: number; y: number } | null>(null);
+  const [dx, setDx] = useState(0);
+  const [dy, setDy] = useState(0);
+  const [dragging, setDragging] = useState(false);
+  const [flipped, setFlipped] = useState(false);
+  const [leaving, setLeaving] = useState<null | "left" | "right" | "up">(null);
+
+  // init
   useEffect(() => {
-    let cancelled = false;
+    let alive = true;
     (async () => {
-      try {
-        const r = await fetch(`/api/recs/personal?media=${media}&limit=40`, { cache: "no-store" });
-        const js = await r.json();
-        if (cancelled) return;
-        if (js?.ok) {
-          setFeed(js.feed as FeedItem[]);
-          setI(0);
-          setFlip(false);
-          setErr("");
-        } else setErr(js?.error || "Fel");
-      } catch (e) {
-        if (!cancelled) setErr(String(e));
-      }
+      const items = await fetchRecs(30, "both");
+      if (!alive) return;
+      setQueue(items);
     })();
-    return () => { cancelled = true; };
-  }, [media]);
-  const fetchDetails = useCallback(async (type: "movie" | "tv", id: number, cache: RequestCache) => {
-    const key = `${type}:${id}`;
-    if (detailsRef.current[key]) return;
-    try {
-      const r = await fetch(`/api/tmdb/details?type=${type}&id=${id}`, { cache });
-      const js = (await r.json()) as ApiDetailsOk | ApiDetailsErr;
-      if (!js.ok) return;
-      setDetailsMap(prev => ({ ...prev, [`${js.mediaType}:${js.id}`]: js }));
-    } catch { /* ignore */ }
+    return () => {
+      alive = false;
+    };
   }, []);
+
+  const current = queue[idx];
+  const next = queue[idx + 1];
+
+  // Preloada details för current + next
   useEffect(() => {
-    const cur = feed[i];
-    if (isRec(cur)) fetchDetails(cur.mediaType, cur.tmdbId, i === 0 ? "no-store" : "force-cache");
-    const nxt = feed[i + 1];
-    if (isRec(nxt)) fetchDetails(nxt.mediaType, nxt.tmdbId, "force-cache");
-  }, [feed, i, fetchDetails]);
-  const cardWrapRef = useRef<HTMLDivElement | null>(null);
-  const startX = useRef<number | null>(null);
-  const startT = useRef<number>(0);
-  const resetCardTransform = useCallback(() => {
-    if (!cardWrapRef.current) return;
-    const el = cardWrapRef.current;
-    el.style.transition = "transform 180ms ease-out, opacity 180ms ease-out";
-    el.style.transform = "";
-    el.style.opacity = "1";
-  }, []);
-  const flyOut = useCallback((dir: "left" | "right") => {
-    if (!cardWrapRef.current) return;
-    const el = cardWrapRef.current;
-    setAnimLock(dir);
-    el.style.transition = "transform 220ms ease-in, opacity 220ms ease-in";
-    el.style.transform = dir === "right" ? "translateX(480px) rotate(16deg)" : "translateX(-480px) rotate(-16deg)";
-    el.style.opacity = "0.75";
-    window.setTimeout(() => {
-      setI(v => v + 1);
-      setFlip(false);
-      setAnimLock(false);
-      el.style.transition = "transform 0s, opacity 0s";
-      el.style.transform = "";
-      el.style.opacity = "1";
-    }, 220);
-  }, []);
-  const decide = useCallback(async (kind: "like" | "dislike" | "skip" | "seen") => {
-    const idx = indexRef.current;
-    const item = feedRef.current[idx];
-    if (!item || item.type === "ad") {
-      setI(v => v + 1);
-      setFlip(false);
-      return;
-    }
-    if (kind === "like") { vibrate(12); flyOut("right"); }
-    else if (kind === "dislike") { vibrate(10); flyOut("left"); }
-    else { resetCardTransform(); }
-    try {
-      await fetch("/api/rate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tmdbId: item.tmdbId, mediaType: item.mediaType, decision: kind }),
-      });
-    } catch { /* ignore */ }
-  }, [flyOut, resetCardTransform]);
-  const toggleWatch = useCallback(async () => {
-    const idx = indexRef.current;
-    const item = feedRef.current[idx];
-    if (!isRec(item)) return;
-    vibrate(20);
-    try {
-      await fetch("/api/watchlist/toggle", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tmdbId: item.tmdbId, mediaType: item.mediaType, add: true }),
-      });
-    } catch { /* ignore */ }
-  }, []);
-  const handleKey = useCallback((e: KeyboardEvent) => {
-    const idx = indexRef.current;
-    const item = feedRef.current[idx];
-    if (!item || item.type === "ad") {
-      if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
-        setI(v => v + 1); setFlip(false);
+    const want = [current, next].filter(Boolean) as BaseItem[];
+    want.forEach(async (it) => {
+      const key = `${it.type}:${it.id}`;
+      if (!detailsCache.current.has(key)) {
+        detailsCache.current.set(key, null); // lås medan laddar
+        const det = await fetchDetails(it);
+        detailsCache.current.set(key, det);
+        setVersion((v) => v + 1);
       }
-      return;
+    });
+  }, [current, next]);
+
+  const getDetails = (it?: BaseItem | null): Details | null => {
+    if (!it) return null;
+    const key = `${it.type}:${it.id}`;
+    return detailsCache.current.get(key) ?? null;
+  };
+
+  const curDetails = getDetails(current);
+  const nextDetails = getDetails(next);
+
+  // ----- Gestik -----
+  const onPointerDown = (e: React.PointerEvent) => {
+    if (!current) return;
+    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+    start.current = { x: e.clientX, y: e.clientY };
+    setDragging(true);
+  };
+
+  const onPointerMove = (e: React.PointerEvent) => {
+    if (!dragging || !start.current) return;
+    setDx(e.clientX - start.current.x);
+    setDy(e.clientY - start.current.y);
+  };
+
+  const resetDrag = () => {
+    setDragging(false);
+    setDx(0);
+    setDy(0);
+    setLeaving(null);
+  };
+
+  const advance = () => {
+    setIdx((i) => i + 1);
+    setFlipped(false);
+    resetDrag();
+  };
+
+  const swipeLeft = async () => {
+    if (!current) return;
+    setLeaving("left");
+    vib(18);
+    await postRate(current, "dislike");
+    setTimeout(advance, 160);
+  };
+
+  const swipeRight = async () => {
+    if (!current) return;
+    setLeaving("right");
+    vib(26);
+    await postRate(current, "like");
+    setTimeout(advance, 160);
+  };
+
+  const swipeUp = async () => {
+    if (!current) return;
+    setLeaving("up");
+    vib(26);
+    await toggleWatchlist(current);
+    notify("Added to Watchlist");
+    setTimeout(advance, 160);
+  };
+
+  const onPointerUp = () => {
+    if (!current) return resetDrag();
+    if (dy < -THRESH_UP && Math.abs(dy) > Math.abs(dx)) {
+      return swipeUp();
     }
-    if (e.key === "ArrowLeft" && !animLock) decide("dislike");
-    else if (e.key === "ArrowRight" && !animLock) decide("like");
-    else if (e.key === "ArrowUp") toggleWatch();
-    else if (e.key === " ") setFlip(f => !f);
-  }, [decide, toggleWatch, animLock]);
+    if (dx > THRESH_X) {
+      return swipeRight(); // HÖGER = LIKE
+    }
+    if (dx < -THRESH_X) {
+      return swipeLeft(); // VÄNSTER = NOPE
+    }
+    // annars: reset
+    resetDrag();
+  };
+
+  const onCardClickOrSpace = () => setFlipped((f) => !f);
+
+  // ----- Tangentbord -----
   useEffect(() => {
-    window.addEventListener("keydown", handleKey);
-    return () => window.removeEventListener("keydown", handleKey);
-  }, [handleKey]);
-  const onPointerDown = useCallback((e: React.PointerEvent) => {
-    if (animLock) return;
-    startX.current = e.clientX; startT.current = e.timeStamp;
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
-    if (cardWrapRef.current) cardWrapRef.current.style.transition = "transform 0s";
-  }, [animLock]);
-  const onPointerMove = useCallback((e: React.PointerEvent) => {
-    if (startX.current == null || !cardWrapRef.current || animLock) return;
-    const dx = e.clientX - startX.current;
-    cardWrapRef.current.style.transform = `translateX(${dx}px) rotate(${dx / 20}deg)`;
-  }, [animLock]);
-  const onPointerEnd = useCallback((e: React.PointerEvent) => {
-    const sx = startX.current; startX.current = null;
-    (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
-    if (sx == null || animLock) return;
-    const dx = e.clientX - sx; const dt = e.timeStamp - startT.current;
-    const isTap = Math.abs(dx) < 10 && dt < 300;
-    if (isTap) { setFlip(f => !f); resetCardTransform(); return; }
-    if (dx > 120) { decide("like"); return; }
-    if (dx < -120) { decide("dislike"); return; }
-    resetCardTransform();
-  }, [decide, resetCardTransform, animLock]);
-  const cur = feed[i];
-  if (err) return <div className="p-6 text-red-500">{err}</div>;
-  if (!cur) return <div className="p-6">Slut på förslag för nu.</div>;
-  const dKey = isRec(cur) ? `${cur.mediaType}:${cur.tmdbId}` : "";
-  const det = isRec(cur) ? detailsMap[dKey] : undefined;
-  const nxt = feed[i + 1];
-  const nxtKey = isRec(nxt) ? `${nxt.mediaType}:${nxt.tmdbId}` : "";
-  const detNext = isRec(nxt) ? detailsMap[nxtKey] : undefined;
-  return (
-    <div className="mx-auto max-w-xl p-6">
-      <h1 className="mb-4 text-2xl font-bold">Dina förslag</h1>
-      {cur.type === "ad" ? (
-        <div className="mb-4 rounded-xl border p-5">
-          <div className="mb-1 text-xs opacity-60">Annons</div>
-          <div className="font-semibold">{cur.headline}</div>
-          <div className="text-sm opacity-80">{cur.body}</div>
-          <a className="text-sm underline" href={cur.href}>{cur.cta}</a>
+    const onKey = (e: KeyboardEvent) => {
+      if (!current) return;
+      if (e.key === "ArrowRight") {
+        e.preventDefault();
+        swipeRight();
+      } else if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        swipeLeft();
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        swipeUp();
+      } else if (e.key === " " || e.code === "Space") {
+        e.preventDefault();
+        onCardClickOrSpace();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [current, idx]);
+
+  // ----- Renderhjälp -----
+  const transform = useMemo(() => {
+    if (leaving === "left") return "translateX(-140%) rotate(-16deg)";
+    if (leaving === "right") return "translateX(140%) rotate(16deg)";
+    if (leaving === "up") return "translateY(-140%)";
+    const rot = dx * 0.05;
+    return `translate(${dx}px, ${dy}px) rotate(${rot}deg)`;
+  }, [dx, dy, leaving]);
+
+  const poster = toPoster(curDetails?.poster, "w780");
+  const miniPoster = toPoster(nextDetails?.poster, "w500");
+
+  // ----- Actions för dockan -----
+  const onNope = useCallback(() => swipeLeft(), [current]);
+  const onLike = useCallback(() => swipeRight(), [current]);
+  const onWatch = useCallback(() => swipeUp(), [current]);
+  const onInfo = useCallback(() => setFlipped((f) => !f), []);
+
+  // ----- Empty state -----
+  if (!current) {
+    return (
+      <div className="px-4 pb-28 pt-6 md:pb-8">
+        <div className="rounded-xl border border-neutral-800 bg-neutral-900 p-5 text-neutral-200">
+          <div className="text-lg font-semibold">Slut på förslag nu.</div>
+          <div className="mt-1 text-sm text-neutral-400">
+            Prova Discover, ändra dina filters eller kom tillbaka senare.
+          </div>
+          <div className="mt-4 text-sm">
+            <a
+              href="/discover"
+              className="rounded-md bg-white px-3 py-2 font-medium text-neutral-900"
+            >
+              Öppna Discover
+            </a>
+          </div>
         </div>
-      ) : (
-        <>
-          <div
-            className="[perspective:1000px] select-none cursor-grab active:cursor-grabbing"
-            style={{ touchAction: "pan-y" }}
-            onPointerDown={onPointerDown}
-            onPointerMove={onPointerMove}
-            onPointerUp={onPointerEnd}
-            onPointerCancel={onPointerEnd}
-          >
-            <div className="relative w-full" style={{ aspectRatio: "2 / 3" }}>
-              {/* next-card preview (hidden while flipping) */}
-              <div
-                className="absolute inset-0 z-0 overflow-hidden rounded-xl border shadow"
-                style={{ transform: "translateY(12px) scale(0.96)", opacity: 0.9, visibility: flip ? "hidden" : "visible" }}
-                aria-hidden
-              >
-                {detNext?.posterPath ? (
-                  <Image
-                    src={`https://image.tmdb.org/t/p/w500${detNext.posterPath}`}
-                    alt={detNext.title}
-                    fill
-                    sizes="(min-width: 768px) 640px, 100vw"
-                    className="object-cover"
-                    placeholder={detNext.blurDataURL ? "blur" : undefined}
-                    blurDataURL={detNext.blurDataURL || undefined}
-                  />
-                ) : (
-                  <div className="absolute inset-0 rounded-xl bg-[linear-gradient(90deg,rgba(255,255,255,0.06)_25%,rgba(255,255,255,0.12)_37%,rgba(255,255,255,0.06)_63%)] bg-[length:400%_100%] animate-[shimmer_1.2s_infinite]" />
-                )}
-              </div>
-              {/* active card (opaque background to prevent show-through) */}
-              <div
-                ref={cardWrapRef}
-                className="absolute inset-0 z-10 overflow-hidden rounded-xl border shadow bg-black"
-              >
-                <div className={`absolute inset-0 transition-transform duration-300 [transform-style:preserve-3d] ${flip ? "[transform:rotateY(180deg)]" : ""}`}>
-                  {/* FRONT */}
-                  <div className="absolute inset-0 [backface-visibility:hidden]">
-                    {det?.posterPath ? (
-                      <Image
-                        src={`https://image.tmdb.org/t/p/w780${det.posterPath}`}
-                        alt={det.title}
-                        fill
-                        sizes="(min-width: 768px) 640px, 100vw"
-                        className="object-cover"
-                        placeholder={det.blurDataURL ? "blur" : undefined}
-                        blurDataURL={det.blurDataURL || undefined}
-                        priority={i === 0}
-                      />
-                    ) : (
-                      <div className="absolute inset-0 rounded-xl bg-[linear-gradient(90deg,rgba(255,255,255,0.06)_25%,rgba(255,255,255,0.12)_37%,rgba(255,255,255,0.06)_63%)] bg-[length:400%_100%] animate-[shimmer_1.2s_infinite]" />
-                    )}
-                    {/* bottom info */}
-                    <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 bg-gradient-to-t from-black/70 via-black/20 to-transparent p-3 text-white">
-                      <div className="flex items-end justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="truncate text-base font-semibold">{det?.title ?? cur.title}</div>
-                          <div className="text-xs opacity-90">{det?.year ?? "—"}</div>
-                        </div>
-                        <div className="shrink-0 text-sm font-medium">★ {fmtRating(det?.voteAverage ?? null)}</div>
-                      </div>
-                    </div>
-                  </div>
-                  {/* BACK */}
-                  <div className="absolute inset-0 bg-black p-4 text-white [backface-visibility:hidden] [transform:rotateY(180deg)]">
-                    <div className="mb-1 text-lg font-semibold">
-                      {det?.title || cur.title} {det?.year ? <span className="text-xs opacity-70">[{det.year}]</span> : null}
-                    </div>
-                    <div className="mb-3 mt-2 flex flex-wrap gap-2">
-                      {(cur.matchedProviders.length ? cur.matchedProviders : (cur.unknown ? ["Okänd"] : []))
-                        .map((p) => (
-                          <span key={p} className="rounded-full border border-white/30 bg-white/10 px-2 py-1 text-xs">{p}</span>
-                        ))}
-                    </div>
-                    <p className="text-sm opacity-90">{det ? det.overview || "Ingen beskrivning." : "Laddar info…"}</p>
-                  </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="pb-28 pt-3 md:pb-8">
+      {/* Mini-stack: topp ~12px av nästa kort, visas bara när inte flip pågår */}
+      {!flipped && next && miniPoster && (
+        <div className="pointer-events-none mx-4 -mb-3 mt-2 rounded-[18px] border border-neutral-800/80 bg-black/50 shadow">
+          <div className="relative h-3 overflow-hidden rounded-t-[18px]">
+            <img
+              alt=""
+              src={miniPoster}
+              className="h-[200px] w-full object-cover opacity-90 blur-[0.5px]"
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Aktuellt kort */}
+      <div className="mx-4">
+        <div
+          role="button"
+          tabIndex={0}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onClick={onCardClickOrSpace}
+          className={[
+            "relative select-none rounded-[22px] border border-neutral-800 bg-neutral-900 shadow-lg",
+            "touch-none will-change-transform",
+            "transition-[transform,opacity] duration-150 ease-out",
+          ].join(" ")}
+          style={{
+            transform,
+          }}
+        >
+          {/* FRONT */}
+          {!flipped && (
+            <div className="relative overflow-hidden rounded-[22px]">
+              {/* svart bakplan hindrar bleed-through */}
+              <div className="absolute inset-0 bg-black" />
+              {poster ? (
+                <img
+                  src={poster}
+                  alt={curDetails?.title || "poster"}
+                  className="relative z-[1] h-auto w-full rounded-[22px]"
+                />
+              ) : (
+                <div className="relative z-[1] aspect-[2/3] w-full rounded-[22px] bg-neutral-800" />
+              )}
+              {/* front overlay: titel + metadata */}
+              <div className="pointer-events-none absolute inset-x-0 bottom-0 z-[2] rounded-b-[22px] bg-gradient-to-t from-black/85 via-black/20 to-transparent p-4">
+                <div className="text-xl font-semibold text-white">
+                  {curDetails?.title ?? "Untitled"}
+                </div>
+                <div className="mt-1 text-sm text-neutral-200">
+                  {curDetails?.year ?? "—"}
+                  {typeof curDetails?.rating === "number" ? (
+                    <span> · ★ {curDetails!.rating!.toFixed(1)}</span>
+                  ) : null}
                 </div>
               </div>
             </div>
-          </div>
-          <ActionDock
-            onNope={() => decide("dislike")}
-            onInfo={() => setFlip(f => !f)}
-            onwatchlist={toggleWatch}
-            onLike={() => decide("like")}
-          />
-        </>
-      )}
-      <div className="mt-4 text-sm opacity-70">
-        Tips: Tap/klick för att vända. ←/→ Nej/Ja, ↑ watchlist, Space vänd.
+          )}
+
+          {/* BACK */}
+          {flipped && (
+            <div className="relative overflow-hidden rounded-[22px] bg-neutral-950">
+              <div className="absolute inset-0 bg-neutral-950" />
+              <div className="relative z-[1] space-y-3 p-4">
+                <div className="text-lg font-semibold">{curDetails?.title ?? "Untitled"}</div>
+                <div className="text-sm text-neutral-300">
+                  {curDetails?.overview || "Ingen beskrivning."}
+                </div>
+                {/* Här kan du lägga providers-chippar senare */}
+              </div>
+            </div>
+          )}
+        </div>
       </div>
-      <style jsx>{`@keyframes shimmer { 0% { background-position: 100% 0 } 100% { background-position: 0 0 } }`}</style>
+
+      {/* Tipsrad */}
+      <div className="mx-6 mt-3 text-center text-[13px] text-neutral-400">
+        Tips: Tap/klick för att vända. ←/→ Nej/Ja, ↑ Watchlist, Space vänd.
+      </div>
+
+      {/* Tinder-dockan */}
+      <ActionDock
+        onNope={onNope}
+        onInfo={onInfo}
+        onWatchlist={onWatch}
+        onLike={onLike}
+      />
     </div>
   );
 }

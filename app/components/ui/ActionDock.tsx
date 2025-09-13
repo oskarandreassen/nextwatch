@@ -1,58 +1,52 @@
+// app/components/ui/ActionDock.tsx
 "use client";
 
-import { Heart, Info, X, Bookmark } from "lucide-react";
-import clsx from "clsx";
-
-
-import { notify } from "@/app/components/lib/notify"; // eller relativt beroende på filens plats
-// efter lyckad POST /api/watchlist/toggle → added:
-notify("Added to Watchlist");
-// om borttagen:
-notify("Removed from Watchlist");
-
+import { X, Info, Bookmark, Heart } from "lucide-react";
 
 type Props = {
   onNope: () => void;
   onInfo: () => void;
-  onwatchlist: () => void;
+  onWatchlist: () => void;
   onLike: () => void;
-  className?: string;
   disabled?: boolean;
 };
 
+function vib(ms = 30) {
+  if (typeof navigator !== "undefined" && "vibrate" in navigator) {
+    (navigator as any).vibrate(ms);
+  }
+}
+
 function RoundBtn({
-  onClick,
   title,
-  children,
   intent,
+  onClick,
   disabled,
+  children,
 }: {
-  onClick: () => void;
   title: string;
-  children: React.ReactNode;
   intent: "danger" | "info" | "save" | "like";
+  onClick: () => void;
   disabled?: boolean;
+  children: React.ReactNode;
 }) {
-  const color = {
-    danger: "bg-red-600/20 border-red-500/40 hover:bg-red-600/30",
-    info:   "bg-blue-600/20 border-blue-500/40 hover:bg-blue-600/30",
-    save:   "bg-violet-600/20 border-violet-500/40 hover:bg-violet-600/30",
-    like:   "bg-green-600/20 border-green-500/40 hover:bg-green-600/30",
-  }[intent];
+  const cls =
+    intent === "danger"
+      ? "border-red-500/40 bg-red-600/20 hover:bg-red-600/30"
+      : intent === "info"
+      ? "border-blue-500/40 bg-blue-600/20 hover:bg-blue-600/30"
+      : intent === "save"
+      ? "border-violet-500/40 bg-violet-600/20 hover:bg-violet-600/30"
+      : "border-green-500/40 bg-green-600/20 hover:bg-green-600/30";
 
   return (
     <button
       type="button"
-      title={title}
       aria-label={title}
-      onClick={onClick}
+      title={title}
       disabled={disabled}
-      className={clsx(
-        "h-14 w-14 rounded-full border backdrop-blur transition-colors",
-        "flex items-center justify-center",
-        disabled ? "opacity-50 cursor-not-allowed" : "cursor-pointer",
-        color
-      )}
+      onClick={onClick}
+      className={`flex h-14 w-14 items-center justify-center rounded-full border text-white shadow-md backdrop-blur transition disabled:opacity-60 md:h-12 md:w-12 ${cls}`}
     >
       {children}
     </button>
@@ -62,29 +56,49 @@ function RoundBtn({
 export default function ActionDock({
   onNope,
   onInfo,
-  onwatchlist,
+  onWatchlist,
   onLike,
-  className,
   disabled,
 }: Props) {
   return (
-    <div
-      className={clsx(
-        "mx-auto mt-3 flex max-w-md items-center justify-center gap-3",
-        className
-      )}
-      aria-label="Kortåtgärder"
-    >
-      <RoundBtn onClick={onNope} title="Nej" intent="danger" disabled={disabled}>
+    <div className="sticky bottom-[calc(env(safe-area-inset-bottom)+68px)] z-30 mx-auto mt-4 flex w-full max-w-[520px] items-center justify-center gap-5 px-4 md:static md:bottom-0 md:mt-6">
+      <RoundBtn
+        title="Nope"
+        intent="danger"
+        disabled={disabled}
+        onClick={() => {
+          vib(18);
+          onNope();
+        }}
+      >
         <X className="h-7 w-7" />
       </RoundBtn>
-      <RoundBtn onClick={onInfo} title="Info" intent="info" disabled={disabled}>
+
+      <RoundBtn title="Info" intent="info" disabled={disabled} onClick={onInfo}>
         <Info className="h-7 w-7" />
       </RoundBtn>
-      <RoundBtn onClick={onwatchlist} title="watchlist" intent="save" disabled={disabled}>
+
+      <RoundBtn
+        title="Watchlist"
+        intent="save"
+        disabled={disabled}
+        onClick={() => {
+          vib(22);
+          onWatchlist();
+        }}
+      >
         <Bookmark className="h-7 w-7" />
       </RoundBtn>
-      <RoundBtn onClick={onLike} title="Ja" intent="like" disabled={disabled}>
+
+      <RoundBtn
+        title="Like"
+        intent="like"
+        disabled={disabled}
+        onClick={() => {
+          vib(28);
+          onLike();
+        }}
+      >
         <Heart className="h-7 w-7" />
       </RoundBtn>
     </div>

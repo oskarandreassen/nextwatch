@@ -10,8 +10,8 @@ export default function Toast() {
     const on = (e: Event) => {
       const m = (e as CustomEvent<string>).detail;
       setMsg(m);
-      if (navigator.vibrate) navigator.vibrate(30);
-      setTimeout(() => setMsg(null), 1600);
+      (navigator as any)?.vibrate?.(30);
+      setTimeout(() => setMsg(null), 1500);
     };
     window.addEventListener("app:toast", on as EventListener);
     return () => window.removeEventListener("app:toast", on as EventListener);

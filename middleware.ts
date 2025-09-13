@@ -6,21 +6,13 @@ const PROTECTED = [/^\/swipe($|\/)/, /^\/group\/swipe($|\/)/];
 
 export async function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
+  if (!PROTECTED.some((re) => re.test(pathname))) return NextResponse.next();
 
-  const needsGate = PROTECTED.some((re) => re.test(pathname));
-  if (!needsGate) return NextResponse.next();
-
-  // kontrollera profil via API (bär med cookies)
   const url = new URL("/api/profile/exists", req.nextUrl.origin);
-  const res = await fetch(url.toString(), {
-    headers: { cookie: req.headers.get("cookie") || "" },
-  }).catch(() => null);
-
-  const ok = !!res && res.ok;
+  const res = await fetch(url, { headers: { cookie: req.headers.get("cookie") || "" } }).catch(() => null);
+  const ok = res?.ok;
   const data = ok ? await res!.json().catch(() => null) : null;
-  const hasProfile = !!(data && data.ok && data.hasProfile);
-
-  if (!hasProfile) {
+  if (!data?.ok || !data.hasProfile) {
     const redirectUrl = new URL("/onboarding", req.nextUrl.origin);
     redirectUrl.searchParams.set("next", req.nextUrl.pathname + req.nextUrl.search);
     return NextResponse.redirect(redirectUrl);
@@ -28,6 +20,4 @@ export async function middleware(req: NextRequest) {
   return NextResponse.next();
 }
 
-export const config = {
-  matcher: ["/((?!_next/|api/session/init|favicon.ico).*)"],
-};
+export const config = { matcher: ["/((?!_next/|api/session/init|favicon.ico).*)"] };

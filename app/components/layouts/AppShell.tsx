@@ -6,17 +6,18 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex min-h-dvh bg-neutral-950 text-neutral-100">
       {/* Desktop sidebar */}
-      <aside className="hidden w-64 shrink-0 border-r border-neutral-800 bg-neutral-900/60 backdrop-blur md:block">
+      <div className="hidden md:block">
         <Sidebar />
-      </aside>
+      </div>
 
       {/* Main */}
       <div className="flex min-h-dvh flex-1 flex-col">
-        <main className="flex-1">{children}</main>
-        {/* Mobile tabs */}
-        <nav className="md:hidden">
+        <main className="mx-auto w-full max-w-3xl flex-1">{children}</main>
+
+        {/* Mobile bottom tabs */}
+        <div className="md:hidden">
           <BottomTabs />
-        </nav>
+        </div>
       </div>
     </div>
   );
