@@ -17,6 +17,12 @@ type Details = {
   rating?: number | null;
 };
 
+// Svar från /api/recs/personal kan vara antingen en array av okända objekt,
+// eller ett objekt { items: [...] }. Vi undviker `any` genom en strikt union.
+type PersonalRecsResponse =
+  | unknown[] // [{ id, type }, ...]
+  | { items?: unknown[] }; // { items: [...] }
+
 // ---- Hjälpare ----
 const THRESH_X = 80;
 const THRESH_UP = 110;
@@ -41,17 +47,21 @@ async function fetchRecs(
 ): Promise<BaseItem[]> {
   const res = await fetch(`/api/recs/personal?media=${media}&limit=${limit}`, { cache: "no-store" });
   if (!res.ok) return [];
-  const data = await res.json().catch(() => null);
-  const raw: unknown[] = Array.isArray((data as any)?.items)
-    ? (data as any).items
-    : Array.isArray(data)
-    ? (data as unknown[])
-    : [];
+  const json = (await res.json().catch(() => null)) as PersonalRecsResponse | null;
+
+  let raw: unknown[] = [];
+  if (Array.isArray(json)) {
+    raw = json;
+  } else if (json && typeof json === "object") {
+    const items = (json as { items?: unknown[] }).items;
+    if (Array.isArray(items)) raw = items;
+  }
 
   const mapped: BaseItem[] = raw
     .map((x): BaseItem | null => {
       if (typeof x !== "object" || x === null) return null;
       const obj = x as Record<string, unknown>;
+
       const idRaw = obj.id ?? obj.tmdbId ?? obj.tmdb_id;
       const id =
         typeof idRaw === "number"
@@ -68,6 +78,7 @@ async function fetchRecs(
       return { id: id as number, type };
     })
     .filter((v): v is BaseItem => Boolean(v));
+
   return mapped;
 }
 
@@ -107,7 +118,6 @@ async function fetchDetails(item: BaseItem): Promise<Details | null> {
   const res = await fetch(`/api/tmdb/details?type=${item.type}&id=${item.id}`, { cache: "force-cache" });
   if (!res.ok) return null;
   const d = (await res.json().catch(() => null)) as unknown;
-  // Oavsett form – extrahera
   return detailsFromUnknown(d, item.type);
 }
 
@@ -159,7 +169,7 @@ export default function SwipeLegacy() {
   const current = queue[idx];
   const next = queue[idx + 1];
 
-  // Preloada details för current + next
+  // Preload current + next
   useEffect(() => {
     const want = [current, next].filter(Boolean) as BaseItem[];
     want.forEach(async (it) => {
@@ -215,8 +225,7 @@ export default function SwipeLegacy() {
     vib(18);
     await postRate(current, "dislike");
     setTimeout(advance, 160);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [current, idx]);
+  }, [current]);
 
   const swipeRight = useCallback(async () => {
     if (!current) return;
@@ -224,8 +233,7 @@ export default function SwipeLegacy() {
     vib(26);
     await postRate(current, "like");
     setTimeout(advance, 160);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [current, idx]);
+  }, [current]);
 
   const swipeUp = useCallback(async () => {
     if (!current) return;
@@ -234,8 +242,7 @@ export default function SwipeLegacy() {
     await toggleWatchlist(current);
     notify("Added to Watchlist");
     setTimeout(advance, 160);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [current, idx]);
+  }, [current]);
 
   const onPointerUp = () => {
     if (!current) return resetDrag();
@@ -287,7 +294,6 @@ export default function SwipeLegacy() {
   const poster = toPoster(curDetails?.poster, "w780");
   const miniPoster = toPoster(nextDetails?.poster, "w500");
 
-  // ----- Actions för dockan -----
   const onNope = useCallback(() => { void swipeLeft(); }, [swipeLeft]);
   const onLike = useCallback(() => { void swipeRight(); }, [swipeRight]);
   const onWatch = useCallback(() => { void swipeUp(); }, [swipeUp]);
@@ -320,6 +326,7 @@ export default function SwipeLegacy() {
       {!flipped && next && miniPoster && (
         <div className="pointer-events-none mx-4 -mb-3 mt-2 rounded-[18px] border border-neutral-800/80 bg-black/50 shadow">
           <div className="relative h-3 overflow-hidden rounded-t-[18px]">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               alt=""
               src={miniPoster}
@@ -350,6 +357,7 @@ export default function SwipeLegacy() {
             <div className="relative overflow-hidden rounded-[22px]">
               <div className="absolute inset-0 bg-black" />
               {poster ? (
+                // eslint-disable-next-line @next/next/no-img-element
                 <img
                   src={poster}
                   alt={curDetails?.title || "poster"}
