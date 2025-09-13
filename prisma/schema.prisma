@@ -23,6 +23,9 @@ model User {
   groupMembers  GroupMember[] @relation("UserGroupMembers")
   groupsCreated Group[]       @relation("UserGroupsCreated")
 
+  // ✅ Motsatt sida av relationen till Verification
+  verifications Verification[]
+
   @@map("users")
 }
 
@@ -38,7 +41,7 @@ model Profile {
   providers        Json     @default("[]")
   updatedAt        DateTime @default(now())  @map("updated_at")
 
-  // smakprofil
+  // Smakprofil
   favoriteMovie    String?
   favoriteShow     String?
   favoriteGenres   String[] @default([])     @db.Text
