@@ -8,43 +8,72 @@ datasource db {
 }
 
 
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
 model User {
-  id         String   @id
-  email      String?  @unique
-  plan       String   @default("free")      
-  planSince  DateTime? @map("plan_since")
-  createdAt  DateTime @default(now()) @map("created_at")
+  id            String    @id
+  email         String?   @unique
+  emailVerified DateTime? @map("email_verified")
+  plan          String    @default("free")
+  planSince     DateTime? @map("plan_since")
+  createdAt     DateTime  @default(now()) @map("created_at")
 
-  profile    Profile?
-  ratings    Rating[]
-  watchlist  watchlist[]
-  purchases  Purchase[]
+  profile       Profile?
+  ratings       Rating[]
+  watchlist     watchlist[]
+  purchases     Purchase[]
 
-  groupMembers GroupMember[] @relation("UserGroupMembers")
-
-  groupsCreated Group[] @relation("UserGroupsCreated")
-
+  groupMembers  GroupMember[] @relation("UserGroupMembers")
+  groupsCreated Group[]       @relation("UserGroupsCreated")
 
   @@map("users")
 }
 
 model Profile {
-  userId            String   @id @map("user_id")
-  dob               DateTime @db.Date
-  uiLanguage        String   @default("sv")      @map("ui_language")
-  yearPreference    String   @default("all")     @map("year_preference")
-  recycleAfterDays  Int      @default(14)        @map("recycle_after_days")
-  region            String   @default("SE")
-  locale            String   @default("sv-SE")
-  providers         Json     @default("[]")
-  updatedAt         DateTime @default(now())     @map("updated_at")
+  userId           String   @id @map("user_id")
+  displayName      String?
+  dob              DateTime @db.Date
+  uiLanguage       String   @default("sv")   @map("ui_language")
+  yearPreference   String   @default("all")  @map("year_preference")
+  recycleAfterDays Int      @default(14)     @map("recycle_after_days")
+  region           String   @default("SE")
+  locale           String   @default("sv-SE")
+  providers        Json     @default("[]")
+  updatedAt        DateTime @default(now())  @map("updated_at")
 
-  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  displayName       String?  @map("display_name")
+  // smakprofil
+  favoriteMovie    String?
+  favoriteShow     String?
+  favoriteGenres   String[] @default([])     @db.Text
+  dislikedGenres   String[] @default([])     @db.Text
 
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("profiles")
 }
+
+// --- resten av dina modeller: Rating, watchlist, Purchase, Group, GroupMember ---
+
+model Verification {
+  token     String   @id
+  userId    String
+  email     String
+  name      String?
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("verifications")
+}
+
 
 model Rating {
   id         String   @id

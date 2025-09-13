@@ -40,7 +40,7 @@ const vib = (ms = 24) => {
 
 // ---- API ----
 async function fetchRecs(
-  limit = 20,
+  limit = 150,
   media: "movie" | "tv" | "both" = "both"
 ): Promise<BaseItem[]> {
   const res = await fetch(`/api/recs/personal?media=${media}&limit=${limit}`, { cache: "no-store" });
