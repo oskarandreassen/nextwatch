@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import AppShell from "../components/layouts/AppShell";
 import Image from "next/image";
 
 type Item = {
@@ -75,7 +74,6 @@ export default function DiscoverPage() {
   }
 
   return (
-    <AppShell>
       <main className="mx-auto max-w-6xl p-6">
         <h1 className="mb-3 text-2xl font-semibold">Discover</h1>
 
@@ -175,6 +173,6 @@ export default function DiscoverPage() {
           </button>
         </div>
       </main>
-    </AppShell>
+
   );
 }
