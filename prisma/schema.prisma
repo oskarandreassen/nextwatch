@@ -7,16 +7,6 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-
-generator client {
-  provider = "prisma-client-js"
-}
-
-datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
-}
-
 model User {
   id            String    @id
   email         String?   @unique
@@ -38,7 +28,7 @@ model User {
 
 model Profile {
   userId           String   @id @map("user_id")
-  displayName      String?
+  displayName      String?  @map("display_name")
   dob              DateTime @db.Date
   uiLanguage       String   @default("sv")   @map("ui_language")
   yearPreference   String   @default("all")  @map("year_preference")
@@ -58,22 +48,6 @@ model Profile {
 
   @@map("profiles")
 }
-
-// --- resten av dina modeller: Rating, watchlist, Purchase, Group, GroupMember ---
-
-model Verification {
-  token     String   @id
-  userId    String
-  email     String
-  name      String?
-  createdAt DateTime @default(now())
-  expiresAt DateTime
-
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@map("verifications")
-}
-
 
 model Rating {
   id         String   @id
@@ -128,7 +102,6 @@ model Group {
   @@map("groups")
 }
 
-
 model GroupMember {
   groupCode  String   @map("group_code")
   userId     String   @map("user_id")
@@ -137,7 +110,19 @@ model GroupMember {
   group      Group    @relation(fields: [groupCode], references: [code], onDelete: Cascade)
   user       User     @relation("UserGroupMembers", fields: [userId], references: [id], onDelete: Cascade)
 
-
   @@id([groupCode, userId])
   @@map("group_members")
+}
+
+model Verification {
+  token     String   @id
+  userId    String
+  email     String
+  name      String?
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("verifications")
 }
