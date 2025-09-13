@@ -17,11 +17,9 @@ type Details = {
   rating?: number | null;
 };
 
-// Svar från /api/recs/personal kan vara antingen en array av okända objekt,
-// eller ett objekt { items: [...] }. Vi undviker `any` genom en strikt union.
 type PersonalRecsResponse =
-  | unknown[] // [{ id, type }, ...]
-  | { items?: unknown[] }; // { items: [...] }
+  | unknown[]
+  | { items?: unknown[] };
 
 // ---- Hjälpare ----
 const THRESH_X = 80;
@@ -206,18 +204,18 @@ export default function SwipeLegacy() {
     setDy(e.clientY - start.current.y);
   };
 
-  const resetDrag = () => {
+  const resetDrag = useCallback(() => {
     setDragging(false);
     setDx(0);
     setDy(0);
     setLeaving(null);
-  };
+  }, []);
 
-  const advance = () => {
+  const advance = useCallback(() => {
     setIdx((i) => i + 1);
     setFlipped(false);
     resetDrag();
-  };
+  }, [resetDrag]);
 
   const swipeLeft = useCallback(async () => {
     if (!current) return;
@@ -225,7 +223,7 @@ export default function SwipeLegacy() {
     vib(18);
     await postRate(current, "dislike");
     setTimeout(advance, 160);
-  }, [current]);
+  }, [current, advance]);
 
   const swipeRight = useCallback(async () => {
     if (!current) return;
@@ -233,7 +231,7 @@ export default function SwipeLegacy() {
     vib(26);
     await postRate(current, "like");
     setTimeout(advance, 160);
-  }, [current]);
+  }, [current, advance]);
 
   const swipeUp = useCallback(async () => {
     if (!current) return;
@@ -242,7 +240,7 @@ export default function SwipeLegacy() {
     await toggleWatchlist(current);
     notify("Added to Watchlist");
     setTimeout(advance, 160);
-  }, [current]);
+  }, [current, advance]);
 
   const onPointerUp = () => {
     if (!current) return resetDrag();

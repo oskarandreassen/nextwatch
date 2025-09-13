@@ -1,9 +1,12 @@
-// app/group/swipe/GroupBar.tsx
 "use client";
 
 import { useEffect, useState } from "react";
 
 type Member = { userId: string; displayName: string; initials: string; joinedAt: string };
+
+type ShareCapableNavigator = Navigator & {
+  share?: (data: { title?: string; text?: string; url?: string }) => Promise<void>;
+};
 
 export default function GroupBar({ code }: { code: string }) {
   const [members, setMembers] = useState<Member[]>([]);
@@ -23,19 +26,25 @@ export default function GroupBar({ code }: { code: string }) {
   const invite = async () => {
     const url = `${location.origin}/group/swipe?code=${encodeURIComponent(code)}`;
     try {
-      if ("share" in navigator) {
-        // @ts-expect-error share stöds på mobiler
-        await navigator.share({ title: "NextWatch group", text: `Join my group: ${code}`, url });
+      const n = navigator as ShareCapableNavigator;
+      if (typeof n.share === "function") {
+        await n.share({ title: "NextWatch group", text: `Join my group: ${code}`, url });
         return;
       }
-      if ("clipboard" in navigator && navigator.clipboard?.writeText) {
+      if (navigator.clipboard?.writeText) {
         await navigator.clipboard.writeText(url);
         alert("Link copied!");
         return;
       }
-    } catch {}
+    } catch {
+      // fallthrough to manual copy
+    }
     const ta = document.createElement("textarea");
-    ta.value = url; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); document.body.removeChild(ta);
+    ta.value = url;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand("copy");
+    document.body.removeChild(ta);
     alert("Link copied!");
   };
 
