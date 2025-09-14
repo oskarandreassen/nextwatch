@@ -118,14 +118,16 @@ model GroupMember {
 }
 
 model Verification {
-  token     String   @id
-  userId    String
+  id        String   @id
+  userId    String   @map("user_id")
   email     String
-  name      String?
-  createdAt DateTime @default(now())
-  expiresAt DateTime
+  code      String
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@index([email], map: "idx_verification_email")
   @@map("verifications")
 }
+
