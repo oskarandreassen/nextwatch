@@ -23,6 +23,10 @@ model User {
   groupMembers  GroupMember[] @relation("UserGroupMembers")
   groupsCreated Group[]       @relation("UserGroupsCreated")
 
+  // NYTT:
+  passwordHash String?   @map("password_hash")
+  lastLoginAt  DateTime? @map("last_login_at")
+
   // relation till verifications
   verifications Verification[]
 
