@@ -216,6 +216,9 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    // Efter validering: raffinera typ för TS och skapa Date nu
+    const dobDate: Date = new Date(dobStr as string);
+
     const user = await prisma.user.findUnique({
       where: { id: uid },
       select: { id: true },
@@ -245,7 +248,7 @@ export async function POST(req: NextRequest) {
 
     const createData: Prisma.ProfileCreateInput = {
       user: { connect: { id: uid } },
-      dob: new Date(dobStr),
+      dob: dobDate,
       displayName,
       region: region!,
       locale: locale!,
