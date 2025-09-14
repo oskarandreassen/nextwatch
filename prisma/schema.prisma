@@ -15,10 +15,10 @@ model User {
   planSince     DateTime? @map("plan_since")
   createdAt     DateTime  @default(now()) @map("created_at")
 
-  profile       Profile?
-  ratings       Rating[]
-  watchlist     watchlist[]
-  purchases     Purchase[]
+  profile   Profile?
+  ratings   Rating[]
+  watchlist watchlist[]
+  purchases Purchase[]
 
   groupMembers  GroupMember[] @relation("UserGroupMembers")
   groupsCreated Group[]       @relation("UserGroupsCreated")
@@ -33,85 +33,85 @@ model Profile {
   userId           String   @id @map("user_id")
   displayName      String?  @map("display_name")
   dob              DateTime @db.Date
-  uiLanguage       String   @default("sv")   @map("ui_language")
-  yearPreference   String   @default("all")  @map("year_preference")
-  recycleAfterDays Int      @default(14)     @map("recycle_after_days")
+  uiLanguage       String   @default("sv") @map("ui_language")
+  yearPreference   String   @default("all") @map("year_preference")
+  recycleAfterDays Int      @default(14) @map("recycle_after_days")
   region           String   @default("SE")
   locale           String   @default("sv-SE")
   providers        Json     @default("[]")
-  updatedAt        DateTime @default(now())  @map("updated_at")
+  updatedAt        DateTime @default(now()) @map("updated_at")
 
   // Smakprofil
-  favoriteMovie    String?
-  favoriteShow     String?
-  favoriteGenres   String[] @default([])     @db.Text
-  dislikedGenres   String[] @default([])     @db.Text
+  favoriteMovie  String?
+  favoriteShow   String?
+  favoriteGenres String[] @default([]) @db.Text
+  dislikedGenres String[] @default([]) @db.Text
 
-  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("profiles")
 }
 
 model Rating {
-  id         String   @id
-  userId     String   @map("user_id")
-  tmdbId     Int      @map("tmdb_id")
-  mediaType  String   @map("media_type")
-  decision   String
-  decidedAt  DateTime @default(now()) @map("decided_at")
+  id        String   @id
+  userId    String   @map("user_id")
+  tmdbId    Int      @map("tmdb_id")
+  mediaType String   @map("media_type")
+  decision  String
+  decidedAt DateTime @default(now()) @map("decided_at")
 
-  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, tmdbId, mediaType], map: "idx_ratings_user_tmdb")
   @@map("ratings")
 }
 
 model watchlist {
-  id         String   @id
-  userId     String   @map("user_id")
-  tmdbId     Int      @map("tmdb_id")
-  mediaType  String   @map("media_type")
-  addedAt    DateTime @default(now()) @map("added_at")
+  id        String   @id
+  userId    String   @map("user_id")
+  tmdbId    Int      @map("tmdb_id")
+  mediaType String   @map("media_type")
+  addedAt   DateTime @default(now()) @map("added_at")
 
-  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, tmdbId, mediaType])
   @@map("watchlist")
 }
 
 model Purchase {
-  id                     String   @id
-  userId                 String   @map("user_id")
-  stripePaymentIntentId  String?  @map("stripe_payment_intent_id")
-  amountTotal            Int      @default(0)     @map("amount_total")
-  currency               String   @default("SEK")
-  product                String   @default("lifetime")
-  createdAt              DateTime @default(now()) @map("created_at")
+  id                    String   @id
+  userId                String   @map("user_id")
+  stripePaymentIntentId String?  @map("stripe_payment_intent_id")
+  amountTotal           Int      @default(0) @map("amount_total")
+  currency              String   @default("SEK")
+  product               String   @default("lifetime")
+  createdAt             DateTime @default(now()) @map("created_at")
 
-  user                   User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, createdAt], map: "idx_purchases_user")
   @@map("purchases")
 }
 
 model Group {
-  code       String   @id
-  createdBy  String   @map("created_by")
-  createdAt  DateTime @default(now()) @map("created_at")
+  code      String   @id
+  createdBy String   @map("created_by")
+  createdAt DateTime @default(now()) @map("created_at")
 
-  members    GroupMember[]
-  creator    User     @relation("UserGroupsCreated", fields: [createdBy], references: [id], onDelete: Cascade)
+  members GroupMember[]
+  creator User          @relation("UserGroupsCreated", fields: [createdBy], references: [id], onDelete: Cascade)
 
   @@map("groups")
 }
 
 model GroupMember {
-  groupCode  String   @map("group_code")
-  userId     String   @map("user_id")
-  joinedAt   DateTime @default(now()) @map("joined_at")
+  groupCode String   @map("group_code")
+  userId    String   @map("user_id")
+  joinedAt  DateTime @default(now()) @map("joined_at")
 
-  group      Group    @relation(fields: [groupCode], references: [code], onDelete: Cascade)
-  user       User     @relation("UserGroupMembers", fields: [userId], references: [id], onDelete: Cascade)
+  group Group @relation(fields: [groupCode], references: [code], onDelete: Cascade)
+  user  User  @relation("UserGroupMembers", fields: [userId], references: [id], onDelete: Cascade)
 
   @@id([groupCode, userId])
   @@map("group_members")
@@ -125,7 +125,7 @@ model Verification {
   createdAt DateTime @default(now())
   expiresAt DateTime
 
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("verifications")
 }

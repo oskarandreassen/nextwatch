@@ -13,13 +13,12 @@ export default function VerifyClient() {
     (async () => {
       if (!token) { setMsg("Saknar token."); return; }
       const res = await fetch(`/api/auth/verify?token=${encodeURIComponent(token)}`);
-      if (alive) {
-        if (res.redirected) {
-          location.href = res.url; // går till /onboarding
-        } else {
-          const d = await res.json().catch(() => null);
-          setMsg(d?.error || "Klar.");
-        }
+      if (!alive) return;
+      if (res.redirected) {
+        location.href = res.url; // -> /onboarding
+      } else {
+        const d = await res.json().catch(() => null);
+        setMsg(d?.error || "Klar.");
       }
     })();
     return () => { alive = false; };

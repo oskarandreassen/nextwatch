@@ -1,4 +1,3 @@
-// lib/email.ts
 import nodemailer from "nodemailer";
 
 const host = process.env.SMTP_HOST || "";
@@ -8,13 +7,8 @@ const pass = process.env.SMTP_PASS || "";
 const from = process.env.SMTP_FROM || `NextWatch <no-reply@localhost>`;
 
 export function getTransport() {
-  const secure = port === 465; // 465 = SSL, 587 = STARTTLS
-  return nodemailer.createTransport({
-    host,
-    port,
-    secure,
-    auth: { user, pass },
-  });
+  const secure = port === 465; // 465 SSL, 587 STARTTLS
+  return nodemailer.createTransport({ host, port, secure, auth: { user, pass } });
 }
 
 export async function sendVerificationEmail(to: string, link: string) {

@@ -27,7 +27,6 @@ export async function POST(req: Request) {
 
     const base = process.env.NEXT_PUBLIC_BASE_URL || "";
     const link = `${base}/auth/verify?token=${encodeURIComponent(token)}`;
-
     await sendVerificationEmail(email, link);
 
     return NextResponse.json({ ok: true });
