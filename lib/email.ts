@@ -49,3 +49,6 @@ export async function sendVerificationMail(to: string, link: string) {
     `,
   });
 }
+
+
+export { sendVerificationMail as sendVerificationEmail };
