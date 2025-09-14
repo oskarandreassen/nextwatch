@@ -118,14 +118,25 @@ function useDebounce<T>(v: T, ms: number) {
   return s;
 }
 
-// ✅ Gör hooken generisk så att RefObject<HTMLDivElement> accepteras
-function useOutside<T extends HTMLElement>(ref: React.RefObject<T>, cb: () => void) {
+// ✅ Ny signatur som accepterar RefObject<HTMLElement | null>
+function useOutside(
+  ref: React.RefObject<HTMLElement | null>,
+  cb: () => void
+) {
   useEffect(() => {
-    function handler(e: MouseEvent) {
-      if (!ref.current || ref.current.contains(e.target as Node)) return;
+    const handler = (e: MouseEvent | TouchEvent) => {
+      const el = ref.current;
+      if (!el) return;
+      if (el.contains(e.target as Node)) return;
       cb();
-    }
-    window.addEventListener("mousedown", handler);
-    return () => window.removeEventListener("mousedown", handler);
+    };
+
+    document.addEventListener("mousedown", handler);
+    document.addEventListener("touchstart", handler);
+    return () => {
+      document.removeEventListener("mousedown", handler);
+      document.removeEventListener("touchstart", handler);
+    };
   }, [ref, cb]);
 }
+
