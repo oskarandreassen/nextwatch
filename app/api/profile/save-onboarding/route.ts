@@ -1,152 +1,112 @@
 // app/api/profile/save-onboarding/route.ts
-import { NextResponse, NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import prisma from "../../../../lib/prisma";
-import { Prisma } from "@prisma/client";
+import type { Prisma } from "@prisma/client";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/** Små type guards så vi slipper 'any' */
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === "object" && v !== null;
-}
-function isString(v: unknown): v is string {
-  return typeof v === "string";
-}
-function isStringArray(v: unknown): v is string[] {
-  return Array.isArray(v) && v.every(isString);
-}
-type Fav = { id: number; title: string; year?: string; poster?: string };
+type FavoriteTitle = {
+  id: number;
+  title: string;
+  year?: string;
+  poster?: string;
+};
 
-function isFav(v: unknown): v is Fav {
-  return (
-    isRecord(v) &&
-    typeof v.id === "number" &&
-    isString(v.title) &&
-    (v.year === undefined || isString(v.year)) &&
-    (v.poster === undefined || isString(v.poster))
-  );
+// Hjälpare: gör om null/objekt till rätt Prisma JSON-input
+function asJsonOrUndef<T extends object>(
+  val: T | null | undefined
+): Prisma.InputJsonValue | undefined {
+  return val != null ? (val as unknown as Prisma.InputJsonValue) : undefined;
 }
 
 export async function POST(req: NextRequest) {
-  // 1) UID från cookie
-  const jar = cookies();
-  const uid = jar.get("nw_uid")?.value ?? null;
-  if (!uid) {
-    return NextResponse.json(
-      { ok: false, message: "Ingen session hittades." },
-      { status: 401 }
-    );
-  }
-
-  // 2) Läs råpayload och plocka ut fält – tolerera flera varianter
-  const raw = (await req.json()) as unknown;
-  if (!isRecord(raw)) {
-    return NextResponse.json(
-      { ok: false, message: "Ogiltig payload (måste vara JSON-objekt)." },
-      { status: 400 }
-    );
-  }
-
-  const displayName = isString(raw.displayName) ? raw.displayName.trim() : "";
-  const dobStr = isString(raw.dob) ? raw.dob.trim() : "";
-  const region = isString(raw.region) ? raw.region.trim() : "";
-  const locale = isString(raw.locale) ? raw.locale.trim() : "";
-
-  // UI-språk: acceptera uiLanguage eller language
-  const uiLanguageRaw =
-    (isString((raw as Record<string, unknown>).uiLanguage)
-      ? (raw as Record<string, unknown>).uiLanguage
-      : undefined) ??
-    (isString((raw as Record<string, unknown>).language)
-      ? (raw as Record<string, unknown>).language
-      : undefined);
-  const uiLanguage = uiLanguageRaw ? uiLanguageRaw.trim() : "";
-
-  // Providers: array av strängar
-  const providers = isStringArray(raw.providers) ? raw.providers : [];
-
-  // Genrer: array av strängar
-  const favoriteGenres = isStringArray(raw.favoriteGenres)
-    ? raw.favoriteGenres
-    : [];
-  const dislikedGenres = isStringArray(raw.dislikedGenres)
-    ? raw.dislikedGenres
-    : [];
-
-  // Favoriter: objekt eller null -> Prisma Json
-  const favoriteMovieVal = isFav(raw.favoriteMovie)
-    ? (raw.favoriteMovie as Fav)
-    : null;
-  const favoriteShowVal = isFav(raw.favoriteShow)
-    ? (raw.favoriteShow as Fav)
-    : null;
-
-  // 3) Obligatoriska fält – tydlig lista
-  const missing: string[] = [];
-  if (!displayName) missing.push("displayName");
-  if (!dobStr) missing.push("dob");
-  if (!region) missing.push("region");
-  if (!locale) missing.push("locale");
-  if (!uiLanguage) missing.push("uiLanguage");
-
-  if (missing.length > 0) {
-    return NextResponse.json(
-      {
-        ok: false,
-        message: "Obligatoriska fält saknas.",
-        missing,
-      },
-      { status: 400 }
-    );
-  }
-
-  // 4) Konvertera datum – vi låser tid till 00:00 för en ren DATE-kolumn
-  //    (Postgres 'DATE' ignorerar tid)
-  const dob = new Date(`${dobStr}T00:00:00.000Z`);
-  if (Number.isNaN(dob.getTime())) {
-    return NextResponse.json(
-      { ok: false, message: "Ogiltigt födelsedatum." },
-      { status: 400 }
-    );
-  }
-
-  // 5) Mappa JSON-fält till Prisma InputJsonValue / JsonNull
-  const favoriteMovie: Prisma.InputJsonValue | Prisma.NullableJsonNullValueInput =
-    favoriteMovieVal ?? Prisma.JsonNull;
-  const favoriteShow: Prisma.InputJsonValue | Prisma.NullableJsonNullValueInput =
-    favoriteShowVal ?? Prisma.JsonNull;
-
   try {
-    const result = await prisma.profile.upsert({
+    // 1) Hämta UID från cookie (OBS: await)
+    const jar = await cookies();
+    const uid = jar.get("nw_uid")?.value ?? null;
+    if (!uid) {
+      return NextResponse.json(
+        { ok: false, message: "Ingen session hittades." },
+        { status: 401 }
+      );
+    }
+
+    // 2) Läs body
+    const body = (await req.json()) as {
+      displayName?: string;
+      dob?: string; // "YYYY-MM-DD"
+      region?: string;
+      locale?: string;
+      uiLanguage?: string;
+      providers?: string[];
+      favoriteMovie?: FavoriteTitle | null;
+      favoriteShow?: FavoriteTitle | null;
+      favoriteGenres?: string[];
+      dislikedGenres?: string[];
+    };
+
+    const displayName = (body.displayName ?? "").trim();
+    const region = (body.region ?? "SE").trim();
+    const locale = (body.locale ?? "sv-SE").trim();
+    const uiLanguage = (body.uiLanguage ?? "sv").trim();
+
+    const providers = Array.isArray(body.providers) ? body.providers : [];
+    const favoriteGenres = Array.isArray(body.favoriteGenres)
+      ? body.favoriteGenres
+      : [];
+    const dislikedGenres = Array.isArray(body.dislikedGenres)
+      ? body.dislikedGenres
+      : [];
+
+    // DOB: om ogiltigt datum -> null
+    const dob =
+      body.dob && !Number.isNaN(new Date(body.dob).getTime())
+        ? new Date(body.dob)
+        : null;
+
+    // 3) Minimikrav
+    if (!displayName || !dob) {
+      return NextResponse.json(
+        { ok: false, message: "Obligatoriska fält saknas." },
+        { status: 400 }
+      );
+    }
+
+    // 4) Upsert
+    const createData = {
+      userId: uid,
+      displayName,
+      dob,
+      region,
+      locale,
+      uiLanguage,
+      providers: providers as unknown as Prisma.InputJsonValue, // JSONB
+      favoriteMovie: asJsonOrUndef(body.favoriteMovie),
+      favoriteShow: asJsonOrUndef(body.favoriteShow),
+      favoriteGenres,
+      dislikedGenres,
+    };
+
+    const updateData = {
+      displayName,
+      region,
+      locale,
+      uiLanguage,
+      providers: providers as unknown as Prisma.InputJsonValue,
+      favoriteMovie: asJsonOrUndef(body.favoriteMovie),
+      favoriteShow: asJsonOrUndef(body.favoriteShow),
+      favoriteGenres,
+      dislikedGenres,
+      updatedAt: new Date(),
+      ...(dob ? { dob } : {}), // låt bli att skriva över om tomt
+    };
+
+    const profile = await prisma.profile.upsert({
       where: { userId: uid },
-      update: {
-        displayName,
-        dob, // Prisma förväntar Date, din kolumn är DATE -> OK
-        region,
-        locale,
-        uiLanguage,
-        providers, // Json (array med strängar) -> OK
-        favoriteMovie,
-        favoriteShow,
-        favoriteGenres,
-        dislikedGenres,
-        updatedAt: new Date(),
-      },
-      create: {
-        user: { connect: { id: uid } },
-        displayName,
-        dob,
-        region,
-        locale,
-        uiLanguage,
-        providers,
-        favoriteMovie,
-        favoriteShow,
-        favoriteGenres,
-        dislikedGenres,
-      },
+      create: createData,
+      update: updateData,
       select: {
         userId: true,
         displayName: true,
@@ -160,11 +120,9 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    return NextResponse.json({ ok: true, profile: result });
-  } catch (err: unknown) {
-    const msg =
-      err instanceof Error ? err.message : "Kunde inte spara onboarding.";
-    // valfritt: console.error(err);
-    return NextResponse.json({ ok: false, message: msg }, { status: 500 });
+    return NextResponse.json({ ok: true, profile });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Server error";
+    return NextResponse.json({ ok: false, message }, { status: 500 });
   }
 }
