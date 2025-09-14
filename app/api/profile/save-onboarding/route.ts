@@ -22,9 +22,10 @@ function isFavoriteTitle(v: unknown): v is FavoriteTitle {
 
 export async function POST(req: NextRequest) {
   try {
-    // 1) Hämta uid från cookie
-    const jar = cookies(); // i Node runtime är detta sync
+    // 1) Hämta uid från cookie (Next.js 15: cookies() är ASYNC)
+    const jar = await cookies();
     const uid = jar.get("nw_uid")?.value ?? null;
+
     if (!uid) {
       return NextResponse.json(
         { ok: false, message: "Ingen session hittades (nw_uid saknas)." },
@@ -91,7 +92,6 @@ export async function POST(req: NextRequest) {
     }
 
     // 4) Bygg Update & Create med korrekta Prisma-typer
-    // JSON-fälten måste vara InputJsonValue eller Prisma.JsonNull
     const favMovieJson:
       | Prisma.InputJsonValue
       | Prisma.NullableJsonNullValueInput = favoriteMovie === null
@@ -109,7 +109,8 @@ export async function POST(req: NextRequest) {
       region,
       locale,
       uiLanguage,
-      providers, // Json; Prisma serialiserar array -> jsonb
+      // providers är JSONB i DB; Prisma serialiserar array -> jsonb
+      providers: providers as unknown as Prisma.InputJsonValue,
       favoriteMovie: favMovieJson,
       favoriteShow: favShowJson,
       favoriteGenres,  // text[]
@@ -118,13 +119,13 @@ export async function POST(req: NextRequest) {
     };
 
     const createData: Prisma.ProfileCreateInput = {
-      user: { connect: { id: uid } },     // <-- VIKTIGT: relation, inte bara userId
-      dob: new Date(dob!),                // <-- krävs i CreateInput
+      user: { connect: { id: uid } }, // relation
+      dob: new Date(dob!),
       displayName,
       region: region!,
       locale: locale!,
       uiLanguage: uiLanguage!,
-      providers,
+      providers: providers as unknown as Prisma.InputJsonValue,
       favoriteMovie: favMovieJson,
       favoriteShow: favShowJson,
       favoriteGenres,
@@ -152,7 +153,6 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ ok: true, profile: saved });
   } catch (err) {
-    // Server-logg till Vercel
     console.error("[save-onboarding] error:", err);
     const message = err instanceof Error ? err.message : "Ett fel uppstod.";
     return NextResponse.json({ ok: false, message }, { status: 500 });
