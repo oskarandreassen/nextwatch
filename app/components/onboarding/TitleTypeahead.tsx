@@ -2,7 +2,7 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type MediaType = "movie" | "tv";
 
@@ -30,8 +30,9 @@ export default function TitleTypeahead({
   const [q, setQ] = useState(value?.title ?? "");
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState<PickedTitle[]>([]);
-  const debounced = useDebounce(q, 200);
+  // Viktigt: typa *utan* `| null` i generiska T – RefObject<T> själv hanterar null
   const boxRef = useRef<HTMLDivElement>(null);
+  const debounced = useDebounce(q, 200);
 
   useEffect(() => {
     setQ(value?.title ?? "");
@@ -44,7 +45,9 @@ export default function TitleTypeahead({
         setItems([]);
         return;
       }
-      const url = `/api/tmdb/search?q=${encodeURIComponent(debounced)}&type=${type}&language=${language}&region=${region}`;
+      const url = `/api/tmdb/search?q=${encodeURIComponent(
+        debounced
+      )}&type=${type}&language=${language}&region=${region}`;
       const res = await fetch(url);
       const data = (await res.json()) as { ok: boolean; results: PickedTitle[] };
       if (!ignore) setItems(data.results ?? []);
@@ -115,7 +118,8 @@ function useDebounce<T>(v: T, ms: number) {
   return s;
 }
 
-function useOutside(ref: React.RefObject<HTMLElement>, cb: () => void) {
+// ✅ Gör hooken generisk så att RefObject<HTMLDivElement> accepteras
+function useOutside<T extends HTMLElement>(ref: React.RefObject<T>, cb: () => void) {
   useEffect(() => {
     function handler(e: MouseEvent) {
       if (!ref.current || ref.current.contains(e.target as Node)) return;
