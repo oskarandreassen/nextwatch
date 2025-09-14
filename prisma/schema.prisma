@@ -1,3 +1,4 @@
+// prisma/schema.prisma
 generator client {
   provider = "prisma-client-js"
 }
@@ -10,9 +11,9 @@ datasource db {
 model User {
   id            String    @id
   email         String?   @unique
-  emailVerified DateTime? @map("email_verified")
   plan          String    @default("free")
   planSince     DateTime? @map("plan_since")
+  emailVerified DateTime? @map("email_verified")
   createdAt     DateTime  @default(now()) @map("created_at")
 
   profile   Profile?
@@ -20,18 +21,15 @@ model User {
   watchlist watchlist[]
   purchases Purchase[]
 
-  groupMembers  GroupMember[] @relation("UserGroupMembers")
-  groupsCreated Group[]       @relation("UserGroupsCreated")
-
-  // ✅ Motsatt sida av relationen till Verification
-  verifications Verification[]
+  groupMembers  GroupMember[]  @relation("UserGroupMembers")
+  groupsCreated Group[]        @relation("UserGroupsCreated")
+  Verification  Verification[]
 
   @@map("users")
 }
 
 model Profile {
   userId           String   @id @map("user_id")
-  displayName      String?  @map("display_name")
   dob              DateTime @db.Date
   uiLanguage       String   @default("sv") @map("ui_language")
   yearPreference   String   @default("all") @map("year_preference")
@@ -41,11 +39,12 @@ model Profile {
   providers        Json     @default("[]")
   updatedAt        DateTime @default(now()) @map("updated_at")
 
-  // ✅ SNAKE_CASE i DB ↔ camelCase i Prisma
+  // Nya fält för namn + smakprofil
+  displayName    String?  @map("display_name")
   favoriteMovie  String?  @map("favorite_movie")
   favoriteShow   String?  @map("favorite_show")
-  favoriteGenres String[] @default([]) @map("favorite_genres") @db.Text
-  dislikedGenres String[] @default([]) @map("disliked_genres") @db.Text
+  favoriteGenres String[] @default([]) @db.Text
+  dislikedGenres String[] @default([]) @db.Text
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -117,18 +116,16 @@ model GroupMember {
   @@map("group_members")
 }
 
+// Verifierings-tokens (tabell: verifications)
 model Verification {
-  token     String   @id                                  // ← fältet heter token (inte id)
+  token     String   @id
   userId    String   @map("user_id")
   email     String
   name      String?
   createdAt DateTime @default(now()) @map("created_at")
-  expiresAt DateTime             @map("expires_at")
+  expiresAt DateTime @map("expires_at")
 
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@index([email], map: "idx_verifications_email")
   @@map("verifications")
 }
-
-

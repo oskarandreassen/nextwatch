@@ -1,14 +1,32 @@
 // app/swipe/page.tsx
-export const runtime = "nodejs";
+import prisma from "@/lib/prisma";
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
+import LegacySwipe from "./_legacy";
+
 export const dynamic = "force-dynamic";
 
-import { Suspense } from "react";
-import Client from "./Client";
+export default async function SwipePage() {
+  const jar = await cookies();
+  const uid = jar.get("nw_uid")?.value;
+  if (!uid) redirect("/auth/signup");
 
-export default function Page() {
-  return (
-    <Suspense fallback={<div className="p-6 text-neutral-400">Laddar rekommendationer…</div>}>
-      <Client />
-    </Suspense>
-  );
+  const user = await prisma.user.findUnique({
+    where: { id: uid },
+    select: { emailVerified: true },
+  });
+
+  const isVerified = !!user?.emailVerified;
+
+  const profile = await prisma.profile.findUnique({
+    where: { userId: uid },
+    select: { userId: true },
+  });
+
+  const hasProfile = !!profile;
+  if (!isVerified || !hasProfile) {
+    redirect("/onboarding");
+  }
+
+  return <LegacySwipe />;
 }

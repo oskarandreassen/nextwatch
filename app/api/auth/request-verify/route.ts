@@ -1,37 +1,56 @@
+// app/api/auth/request-verify/route.ts
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
+import prisma from "@/lib/prisma";
 import { randomUUID } from "crypto";
-import prisma from "../../../../lib/prisma";
-import { sendVerificationEmail } from "../../../../lib/email";
-
+import { sendVerificationMail } from "@/lib/email";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+type Body = {
+  email: string;
+  name?: string;
+};
+
 export async function POST(req: Request) {
   try {
-    const { email, name } = (await req.json()) as { email?: string; name?: string };
-    if (!email) return NextResponse.json({ ok: false, error: "Email required" }, { status: 400 });
+    const { email, name }: Body = await req.json();
+    if (!email) {
+      return NextResponse.json({ ok: false, error: "Missing email" }, { status: 400 });
+    }
 
-    const cookieStore = await cookies();
-    const uid = cookieStore.get("nw_uid")?.value;
-    if (!uid) return NextResponse.json({ ok: false, error: "No session" }, { status: 401 });
+    // Hitta eller skapa user (guest → sätter bara email om saknas)
+    let user = await prisma.user.findFirst({ where: { email } });
+    if (!user) {
+      user = await prisma.user.create({
+        data: { id: randomUUID(), email },
+      });
+    }
 
+    // Skapa / ersätt token
     const token = randomUUID();
-    const expiresAt = new Date(Date.now() + 1000 * 60 * 60 * 24); // 24h
+    const expiresAt = new Date(Date.now() + 30 * 60 * 1000); // 30 min
 
     await prisma.verification.upsert({
       where: { token },
       update: {},
-      create: { token, userId: uid, email, name, expiresAt },
+      create: {
+        token,
+        userId: user.id,
+        email,
+        name,
+        expiresAt,
+      },
     });
 
-    const base = process.env.NEXT_PUBLIC_BASE_URL || "";
-    const link = `${base}/auth/verify?token=${encodeURIComponent(token)}`;
-    await sendVerificationEmail(email, link);
+    const base = process.env.NEXT_PUBLIC_BASE_URL ?? "http://localhost:3000";
+    const link = `${base}/api/auth/request-verify/verify?token=${encodeURIComponent(token)}`;
+
+    await sendVerificationMail(email, link);
 
     return NextResponse.json({ ok: true });
-  } catch (err: unknown) {
-    return NextResponse.json({ ok: false, error: (err as Error).message }, { status: 500 });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    return NextResponse.json({ ok: false, error: message }, { status: 500 });
   }
 }
