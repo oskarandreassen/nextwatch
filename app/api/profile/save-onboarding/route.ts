@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import prisma from "../../../../lib/prisma";
+import { Prisma } from "@prisma/client"; // <-- NYTT
 
 type FavoriteTitle = {
   id: number;
@@ -11,15 +12,15 @@ type FavoriteTitle = {
 
 type Body = {
   displayName: string;
-  dob: string;                // "YYYY-MM-DD"
-  uiLanguage: string;         // "sv" | "en" | ...
-  region: string;             // "SE" | ...
-  locale: string;             // "sv-SE" | ...
-  providers: string[];        // ["Netflix", ...]
+  dob: string;
+  uiLanguage: string;
+  region: string;
+  locale: string;
+  providers: string[];
   favoriteMovie?: FavoriteTitle | null;
   favoriteShow?: FavoriteTitle | null;
-  favoriteGenres: string[];   // <— LIKES
-  dislikedGenres: string[];   // <— DISLIKES
+  favoriteGenres: string[];
+  dislikedGenres: string[];
 };
 
 function bad(msg: string, status = 400) {
@@ -30,12 +31,10 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
-  // 1) Hämta session
   const jar = await cookies();
   const uid = jar.get("nw_uid")?.value ?? null;
   if (!uid) return bad("Ingen session. Logga in igen.", 401);
 
-  // 2) Läs & validera body
   let body: Body;
   try {
     body = (await req.json()) as Body;
@@ -56,7 +55,6 @@ export async function POST(req: Request) {
     dislikedGenres,
   } = body;
 
-  // 3) Grundkrav
   if (
     !displayName?.trim() ||
     !dob?.trim() ||
@@ -67,17 +65,20 @@ export async function POST(req: Request) {
     return bad("Obligatoriska fält saknas.");
   }
 
-  // 4) Säkerställ typer
   if (!Array.isArray(providers)) return bad("providers måste vara en lista.");
   if (!Array.isArray(favoriteGenres)) return bad("favoriteGenres måste vara en lista.");
   if (!Array.isArray(dislikedGenres)) return bad("dislikedGenres måste vara en lista.");
 
-  // 5) Datum-parse (lås till midnatt UTC för att undvika TZ-drift)
   const dobIso = `${dob}T00:00:00.000Z`;
   const dobDate = new Date(dobIso);
   if (Number.isNaN(dobDate.getTime())) return bad("Födelsedatum är ogiltigt.");
 
-  // 6) Upsert
+  // Viktigt: Prisma vill ha JSON-sentinels för null
+  const favMovieForDb: Prisma.InputJsonValue | Prisma.NullTypes.DbNull =
+    favoriteMovie === null ? Prisma.DbNull : (favoriteMovie as Prisma.InputJsonValue);
+  const favShowForDb: Prisma.InputJsonValue | Prisma.NullTypes.DbNull =
+    favoriteShow === null ? Prisma.DbNull : (favoriteShow as Prisma.InputJsonValue);
+
   try {
     const updated = await prisma.profile.upsert({
       where: { userId: uid },
@@ -86,23 +87,23 @@ export async function POST(req: Request) {
         region,
         locale,
         uiLanguage,
-        providers,              // JSONB
-        favoriteMovie,          // JSONB
-        favoriteShow,           // JSONB
-        favoriteGenres,         // text[]
-        dislikedGenres,         // text[]
+        providers,
+        favoriteMovie: favMovieForDb, // <-- fix
+        favoriteShow: favShowForDb,   // <-- fix
+        favoriteGenres,
+        dislikedGenres,
         updatedAt: new Date(),
       },
       create: {
-        user: { connect: { id: uid } }, // relation krävs vid create
+        user: { connect: { id: uid } },
         dob: dobDate,
         displayName,
         region,
         locale,
         uiLanguage,
         providers,
-        favoriteMovie,
-        favoriteShow,
+        favoriteMovie: favMovieForDb, // <-- fix
+        favoriteShow: favShowForDb,   // <-- fix
         favoriteGenres,
         dislikedGenres,
       },
