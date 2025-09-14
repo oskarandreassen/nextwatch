@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import prisma from "../../../../lib/prisma";
+import type { Prisma } from "@prisma/client";
 
-// --------- typer ----------
+// --------- typer för request ----------
 type TMDBTitle = {
   id: number;
   title: string;
@@ -13,16 +14,15 @@ type TMDBTitle = {
 type OnboardingPayload = {
   displayName: string;
   dob?: string; // "YYYY-MM-DD"
-  region: string;  // "SE"
+  region: string; // "SE"
   language: string; // "sv"
-  providers: string[]; // ["Netflix","Disney+", ...]
+  providers: string[]; // ["Netflix", "Disney+", ...]
   favoriteMovie?: TMDBTitle | null;
   favoriteShow?: TMDBTitle | null;
   favoriteGenres?: string[];
   dislikedGenres?: string[];
 };
 
-// Hjälp: parse ISO-date tryggt
 function parseDob(input?: string): Date | undefined {
   if (!input) return undefined;
   const d = new Date(input);
@@ -43,9 +43,8 @@ export async function POST(req: Request) {
       );
     }
 
-    const bodyUnknown: unknown = await req.json();
-    // Minimal runtime-validering
-    const b = bodyUnknown as OnboardingPayload;
+    const raw: unknown = await req.json();
+    const b = raw as OnboardingPayload;
 
     if (!b.displayName || !b.region || !b.language) {
       return NextResponse.json(
@@ -56,33 +55,44 @@ export async function POST(req: Request) {
 
     const dobDate = parseDob(b.dob);
 
-    // Bygg update/create-objekt utan undefined-fältskrivning
-    const updateData: Record<string, unknown> = {
+    // --- Typed UPDATE ---
+    const updateData: Prisma.ProfileUpdateInput = {
       displayName: b.displayName,
       region: b.region,
       locale: `${b.language}-${b.region}`,
       uiLanguage: b.language,
-      providers: b.providers ?? [],
-      favoriteMovie: b.favoriteMovie ?? null,
-      favoriteShow: b.favoriteShow ?? null,
-      favoriteGenres: b.favoriteGenres ?? [],
-      dislikedGenres: b.dislikedGenres ?? [],
+      providers: (b.providers ?? []) as unknown as Prisma.InputJsonValue,
+      // JSON: InputJsonValue | NullableJsonNullValueInput
+      favoriteMovie:
+        (b.favoriteMovie ?? null) as unknown as Prisma.InputJsonValue,
+      favoriteShow:
+        (b.favoriteShow ?? null) as unknown as Prisma.InputJsonValue,
+      favoriteGenres: b.favoriteGenres
+        ? { set: b.favoriteGenres }
+        : undefined,
+      dislikedGenres: b.dislikedGenres
+        ? { set: b.dislikedGenres }
+        : undefined,
       updatedAt: new Date(),
+      // Date kan sättas direkt i UpdateInput
+      dob: dobDate ?? undefined,
     };
-    if (dobDate) updateData.dob = dobDate;
 
-    const createData: Record<string, unknown> = {
-      userId: uid,
+    // --- Typed CREATE (checked) ---
+    const createData: Prisma.ProfileCreateInput = {
+      user: { connect: { id: uid } }, // relation
       displayName: b.displayName,
       dob: dobDate ?? new Date("2000-01-01"),
       region: b.region,
       locale: `${b.language}-${b.region}`,
       uiLanguage: b.language,
-      providers: b.providers ?? [],
-      favoriteMovie: b.favoriteMovie ?? null,
-      favoriteShow: b.favoriteShow ?? null,
-      favoriteGenres: b.favoriteGenres ?? [],
-      dislikedGenres: b.dislikedGenres ?? [],
+      providers: (b.providers ?? []) as unknown as Prisma.InputJsonValue,
+      favoriteMovie:
+        (b.favoriteMovie ?? null) as unknown as Prisma.InputJsonValue,
+      favoriteShow:
+        (b.favoriteShow ?? null) as unknown as Prisma.InputJsonValue,
+      favoriteGenres: { set: b.favoriteGenres ?? [] },
+      dislikedGenres: { set: b.dislikedGenres ?? [] },
     };
 
     const saved = await prisma.profile.upsert({
@@ -103,12 +113,8 @@ export async function POST(req: Request) {
     });
 
     return NextResponse.json({ ok: true, profile: saved });
-  } catch (err: unknown) {
-    const message =
-      err instanceof Error ? err.message : "Något gick fel vid sparning.";
-    return NextResponse.json(
-      { ok: false, error: message },
-      { status: 500 }
-    );
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Något gick fel vid sparning.";
+    return NextResponse.json({ ok: false, error: message }, { status: 500 });
   }
 }
