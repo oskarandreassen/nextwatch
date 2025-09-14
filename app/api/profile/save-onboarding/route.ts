@@ -7,13 +7,6 @@ import { Prisma } from "@prisma/client";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-type FavoriteTitle = {
-  id: number;
-  title: string;
-  year?: string;
-  poster?: string | null;
-};
-
 // ——— Helpers ———
 function toNumber(n: unknown): number | null {
   if (typeof n === "number" && Number.isFinite(n)) return n;
@@ -53,11 +46,11 @@ function normalizeFavorite(
       typeof o.year === "string"
         ? o.year
         : typeof o.releaseYear === "string"
-        ? o.releaseYear
+        ? (o.releaseYear as string)
         : undefined;
     const poster =
       typeof o.poster === "string"
-        ? o.poster
+        ? (o.poster as string)
         : typeof o.poster_path === "string"
         ? (o.poster_path as string)
         : undefined;
@@ -68,7 +61,6 @@ function normalizeFavorite(
     if (year) out.year = year;
     if (poster !== undefined) out.poster = poster;
 
-    // Om varken id eller title finns – lagra som tomt JSON-objekt
     if (!("id" in out) && !("title" in out)) return Prisma.JsonNull;
     return out as Prisma.InputJsonValue;
   }
@@ -77,18 +69,23 @@ function normalizeFavorite(
 }
 
 function toProvidersJson(p: unknown): Prisma.InputJsonValue {
-  // Tillåt string[], number[], eller array av objekt { id: string }
   if (Array.isArray(p)) {
     const norm = p
       .map((x) => {
-        if (typeof x === "string" || typeof x === "number") return String(x);
-        if (x && typeof x === "object" && "id" in x) {
-          const id = (x as any).id;
-          if (typeof id === "string" || typeof id === "number") return String(id);
+        if (typeof x === "string" || typeof x === "number") {
+          return String(x);
+        }
+        if (x && typeof x === "object") {
+          const rec = x as Record<string, unknown>;
+          const id =
+            (typeof rec.id === "string" && rec.id) ||
+            (typeof rec.id === "number" && String(rec.id)) ||
+            null;
+          return id ?? null;
         }
         return null;
       })
-      .filter((x): x is string => x !== null);
+      .filter((v): v is string => v !== null);
     return norm as unknown as Prisma.InputJsonValue;
   }
   // Fallback: kapsla in vad som än kom
@@ -135,14 +132,13 @@ export async function POST(req: NextRequest) {
       dislikedGenres = [],
     } = body ?? {};
 
-    // 3) Validering (bara nödvändigt – men mer tolerant med trim)
+    // 3) Validering
     const missing: string[] = [];
     if (!displayName?.trim()) missing.push("displayName");
     if (!dob?.trim()) missing.push("dob");
     if (!region?.trim()) missing.push("region");
     if (!locale?.trim()) missing.push("locale");
     if (!uiLanguage?.trim()) missing.push("uiLanguage");
-
     if (missing.length) {
       return NextResponse.json(
         { ok: false, message: `Obligatoriska fält saknas: ${missing.join(", ")}` },
@@ -150,7 +146,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 4) Normalisera fält
+    // 4) Normalisering
     const favMovieJson = normalizeFavorite(favoriteMovie);
     const favShowJson = normalizeFavorite(favoriteShow);
     const providersJson = toProvidersJson(providers);
@@ -171,7 +167,7 @@ export async function POST(req: NextRequest) {
 
     const createData: Prisma.ProfileCreateInput = {
       user: { connect: { id: uid } },
-      dob: new Date(dob!), // DB-kolumn är DATE; din SQL har inte NOT NULL-constraint, men CreateInput kräver den här i din modell
+      dob: new Date(dob!),
       displayName,
       region: region!,
       locale: locale!,
