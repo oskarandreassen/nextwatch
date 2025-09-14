@@ -82,7 +82,101 @@ function toProvidersJson(p: unknown): Prisma.InputJsonValue {
   return (p ?? []) as Prisma.InputJsonValue;
 }
 
-// Centraliserad felrespons (med debug)
+// ——— DOB extraction ———
+// Försöker hitta födelsedatum i flera alias & strukturer.
+// Returnerar ISO-sträng "YYYY-MM-DD" om möjligt, annars null.
+function extractDob(body: unknown): string | null {
+  if (!body || typeof body !== "object") return null;
+  const o = body as Record<string, unknown>;
+
+  const candidates: unknown[] = [];
+
+  // Platta fält
+  candidates.push(
+    o.dob,
+    o.dateOfBirth,
+    o.birthdate,
+    o.birthday,
+    o.dobISO,
+    o.birth_date
+  );
+
+  // Vanliga nästlade
+  const nestedPaths = [
+    ["profile", "dob"],
+    ["form", "dob"],
+    ["data", "dob"],
+    ["profile", "dateOfBirth"],
+    ["profile", "birthdate"],
+    ["values", "dob"],
+  ];
+  for (const path of nestedPaths) {
+    let cur: any = o;
+    for (const key of path) {
+      if (cur && typeof cur === "object" && key in cur) {
+        cur = (cur as Record<string, unknown>)[key];
+      } else {
+        cur = undefined;
+        break;
+      }
+    }
+    if (cur !== undefined) candidates.push(cur);
+  }
+
+  // Objekt med {year,month,day}
+  const ymdObj = candidates.find(
+    (c) =>
+      c &&
+      typeof c === "object" &&
+      "year" in (c as any) &&
+      "month" in (c as any) &&
+      "day" in (c as any)
+  ) as any;
+  if (ymdObj) {
+    const y = String(ymdObj.year).padStart(4, "0");
+    const m = String(ymdObj.month).padStart(2, "0");
+    const d = String(ymdObj.day).padStart(2, "0");
+    if (/^\d{4}-\d{2}-\d{2}$/.test(`${y}-${m}-${d}`)) return `${y}-${m}-${d}`;
+  }
+
+  // Första icke-tomma kandidat
+  const first = candidates.find(
+    (c) => typeof c === "string" && c.trim().length > 0
+  ) as string | undefined;
+  if (!first) return null;
+
+  const s = first.trim();
+
+  // Tillåt "YYYY-MM-DD" (input type="date")
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+
+  // Tillåt "YYYY/MM/DD" eller "YYYY.MM.DD"
+  const s1 = s.replace(/[/.]/g, "-");
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s1)) return s1;
+
+  // Tillåt svenska format "DD/MM/YYYY" eller "DD.MM.YYYY" → normalisera
+  const sv = s.replace(/[.]/g, "/");
+  const m = sv.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) {
+    const dd = m[1].padStart(2, "0");
+    const mm = m[2].padStart(2, "0");
+    const yyyy = m[3];
+    return `${yyyy}-${mm}-${dd}`;
+  }
+
+  // Sista utväg: Date-parse och formattera till YYYY-MM-DD om giltigt
+  const dt = new Date(s);
+  if (!Number.isNaN(dt.getTime())) {
+    const yyyy = String(dt.getFullYear());
+    const mm = String(dt.getMonth() + 1).padStart(2, "0");
+    const dd = String(dt.getDate()).padStart(2, "0");
+    return `${yyyy}-${mm}-${dd}`;
+  }
+
+  return null;
+}
+
+// Centraliserad felrespons
 function fail(
   status: number,
   message: string,
@@ -94,7 +188,7 @@ function fail(
   return NextResponse.json(body, { status });
 }
 
-// —— Route ——
+// ——— Route ———
 export async function POST(req: NextRequest) {
   const debug = new URL(req.url).searchParams.get("debug") === "1";
 
@@ -107,68 +201,51 @@ export async function POST(req: NextRequest) {
     }
 
     // 2) Body
-    const body = (await req.json()) as {
-      displayName?: string;
-      dob?: string; // YYYY-MM-DD
-      region?: string;
-      locale?: string;
-      uiLanguage?: string;
-      providers?: unknown;
-      favoriteMovie?: unknown;
-      favoriteShow?: unknown;
-      favoriteGenres?: string[];
-      dislikedGenres?: string[];
-    };
+    const body = (await req.json()) as Record<string, unknown>;
 
-    const {
-      displayName,
-      dob,
-      region,
-      locale,
-      uiLanguage,
-      providers,
-      favoriteMovie,
-      favoriteShow,
-      favoriteGenres = [],
-      dislikedGenres = [],
-    } = body ?? {};
+    // 3) Läs fält (tolerant)
+    const displayName = (body.displayName as string | undefined)?.trim();
+    const region = (body.region as string | undefined)?.trim();
+    const locale = (body.locale as string | undefined)?.trim();
+    const uiLanguage = (body.uiLanguage as string | undefined)?.trim();
+    const providers = body.providers;
+    const favoriteMovie = body.favoriteMovie;
+    const favoriteShow = body.favoriteShow;
+    const favoriteGenres = (body.favoriteGenres as string[] | undefined) ?? [];
+    const dislikedGenres = (body.dislikedGenres as string[] | undefined) ?? [];
 
-    // 3) Basvalidering
+    const dobStr = extractDob(body); // ← NYCKELN
+
+    // 4) Basvalidering
     const missing: string[] = [];
-    if (!displayName?.trim()) missing.push("displayName");
-    if (!dob?.trim()) missing.push("dob");
-    if (!region?.trim()) missing.push("region");
-    if (!locale?.trim()) missing.push("locale");
-    if (!uiLanguage?.trim()) missing.push("uiLanguage");
+    if (!displayName) missing.push("displayName");
+    if (!dobStr) missing.push("dob");
+    if (!region) missing.push("region");
+    if (!locale) missing.push("locale");
+    if (!uiLanguage) missing.push("uiLanguage");
     if (missing.length) {
-      return fail(
-        400,
-        `Obligatoriska fält saknas: ${missing.join(", ")}`,
-        debug,
-        { received: body }
-      );
+      return fail(400, `Obligatoriska fält saknas: ${missing.join(", ")}`, debug, {
+        receivedKeys: Object.keys(body),
+      });
     }
 
-    // 4) Säkerställ att user finns (annars FK-fel på connect)
+    // 5) Säkerställ user finns
     const user = await prisma.user.findUnique({
       where: { id: uid },
-      select: { id: true, email: true },
+      select: { id: true },
     });
     if (!user) {
-      return fail(
-        401,
-        "Ogiltig session: användaren finns inte. Logga in igen.",
-        debug,
-        { uidFromCookie: uid }
-      );
+      return fail(401, "Ogiltig session: användaren finns inte. Logga in igen.", debug, {
+        uidFromCookie: uid,
+      });
     }
 
-    // 5) Normalisering
+    // 6) Normalisering
     const favMovieJson = normalizeFavorite(favoriteMovie);
     const favShowJson = normalizeFavorite(favoriteShow);
     const providersJson = toProvidersJson(providers);
 
-    // 6) Upsert
+    // 7) Upsert
     const updateData: Prisma.ProfileUpdateInput = {
       displayName,
       region,
@@ -184,11 +261,11 @@ export async function POST(req: NextRequest) {
 
     const createData: Prisma.ProfileCreateInput = {
       user: { connect: { id: uid } },
-      dob: new Date(dob!), // DATE i DB; Prisma Create kräver den här i din modell
+      dob: new Date(dobStr), // DB typ DATE
       displayName,
-      region: region!,
-      locale: locale!,
-      uiLanguage: uiLanguage!,
+      region,
+      locale,
+      uiLanguage,
       providers: providersJson,
       favoriteMovie: favMovieJson,
       favoriteShow: favShowJson,
@@ -216,29 +293,9 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ ok: true, profile: saved });
   } catch (err) {
-    // Prisma-felkoder: https://www.prisma.io/docs/orm/reference/error-reference
     if (err instanceof Prisma.PrismaClientKnownRequestError) {
-      if (err.code === "P2003") {
-        // Foreign key
-        return fail(409, "Databasfel (FK). Kontrollera att user/profil stämmer.", true, {
-          code: err.code,
-          meta: err.meta,
-        });
-      }
-      if (err.code === "P2002") {
-        // Unique constraint
-        return fail(409, "Databasfel (unik constraint).", true, {
-          code: err.code,
-          meta: err.meta,
-        });
-      }
-      if (err.code === "P2025") {
-        // Record not found
-        return fail(404, "Post saknas (P2025).", true, { code: err.code, meta: err.meta });
-      }
       return fail(500, "Prisma-fel.", true, { code: err.code, meta: err.meta });
     }
-
     console.error("[save-onboarding] error:", err);
     const message = err instanceof Error ? err.message : "Ett fel uppstod.";
     return fail(500, message, true);
