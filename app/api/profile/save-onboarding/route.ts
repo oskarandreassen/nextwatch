@@ -2,7 +2,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import prisma from "../../../../lib/prisma";
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -11,24 +11,23 @@ type FavoriteTitle = {
   id: number;
   title: string;
   year?: string;
-  poster?: string;
+  poster?: string | null;
 };
 
-// Hjälpare: gör om null/objekt till rätt Prisma JSON-input
-function asJsonOrUndef<T extends object>(
-  val: T | null | undefined
-): Prisma.InputJsonValue | undefined {
-  return val != null ? (val as unknown as Prisma.InputJsonValue) : undefined;
+function isFavoriteTitle(v: unknown): v is FavoriteTitle {
+  if (v === null || typeof v !== "object") return false;
+  const o = v as Record<string, unknown>;
+  return typeof o.id === "number" && typeof o.title === "string";
 }
 
 export async function POST(req: NextRequest) {
   try {
-    // 1) Hämta UID från cookie (OBS: await)
-    const jar = await cookies();
+    // 1) Hämta uid från cookie
+    const jar = cookies(); // i Node runtime är detta sync
     const uid = jar.get("nw_uid")?.value ?? null;
     if (!uid) {
       return NextResponse.json(
-        { ok: false, message: "Ingen session hittades." },
+        { ok: false, message: "Ingen session hittades (nw_uid saknas)." },
         { status: 401 }
       );
     }
@@ -36,7 +35,7 @@ export async function POST(req: NextRequest) {
     // 2) Läs body
     const body = (await req.json()) as {
       displayName?: string;
-      dob?: string; // "YYYY-MM-DD"
+      dob?: string; // YYYY-MM-DD
       region?: string;
       locale?: string;
       uiLanguage?: string;
@@ -47,66 +46,97 @@ export async function POST(req: NextRequest) {
       dislikedGenres?: string[];
     };
 
-    const displayName = (body.displayName ?? "").trim();
-    const region = (body.region ?? "SE").trim();
-    const locale = (body.locale ?? "sv-SE").trim();
-    const uiLanguage = (body.uiLanguage ?? "sv").trim();
-
-    const providers = Array.isArray(body.providers) ? body.providers : [];
-    const favoriteGenres = Array.isArray(body.favoriteGenres)
-      ? body.favoriteGenres
-      : [];
-    const dislikedGenres = Array.isArray(body.dislikedGenres)
-      ? body.dislikedGenres
-      : [];
-
-    // DOB: om ogiltigt datum -> null
-    const dob =
-      body.dob && !Number.isNaN(new Date(body.dob).getTime())
-        ? new Date(body.dob)
-        : null;
-
-    // 3) Minimikrav
-    if (!displayName || !dob) {
-      return NextResponse.json(
-        { ok: false, message: "Obligatoriska fält saknas." },
-        { status: 400 }
-      );
-    }
-
-    // 4) Upsert
-    const createData = {
-      userId: uid,
+    const {
       displayName,
       dob,
       region,
       locale,
       uiLanguage,
-      providers: providers as unknown as Prisma.InputJsonValue, // JSONB
-      favoriteMovie: asJsonOrUndef(body.favoriteMovie),
-      favoriteShow: asJsonOrUndef(body.favoriteShow),
-      favoriteGenres,
-      dislikedGenres,
-    };
+      providers = [],
+      favoriteMovie = null,
+      favoriteShow = null,
+      favoriteGenres = [],
+      dislikedGenres = [],
+    } = body ?? {};
 
-    const updateData = {
+    // 3) Grundvalidering + tydligt svar
+    const missing: string[] = [];
+    if (!displayName?.trim()) missing.push("displayName");
+    if (!dob?.trim()) missing.push("dob");
+    if (!region?.trim()) missing.push("region");
+    if (!locale?.trim()) missing.push("locale");
+    if (!uiLanguage?.trim()) missing.push("uiLanguage");
+
+    if (missing.length) {
+      return NextResponse.json(
+        {
+          ok: false,
+          message: `Obligatoriska fält saknas: ${missing.join(", ")}`,
+        },
+        { status: 400 }
+      );
+    }
+
+    if (favoriteMovie !== null && !isFavoriteTitle(favoriteMovie)) {
+      return NextResponse.json(
+        { ok: false, message: "favoriteMovie har ogiltigt format." },
+        { status: 400 }
+      );
+    }
+    if (favoriteShow !== null && !isFavoriteTitle(favoriteShow)) {
+      return NextResponse.json(
+        { ok: false, message: "favoriteShow har ogiltigt format." },
+        { status: 400 }
+      );
+    }
+
+    // 4) Bygg Update & Create med korrekta Prisma-typer
+    // JSON-fälten måste vara InputJsonValue eller Prisma.JsonNull
+    const favMovieJson:
+      | Prisma.InputJsonValue
+      | Prisma.NullableJsonNullValueInput = favoriteMovie === null
+      ? Prisma.JsonNull
+      : (favoriteMovie as unknown as Prisma.InputJsonValue);
+
+    const favShowJson:
+      | Prisma.InputJsonValue
+      | Prisma.NullableJsonNullValueInput = favoriteShow === null
+      ? Prisma.JsonNull
+      : (favoriteShow as unknown as Prisma.InputJsonValue);
+
+    const updateData: Prisma.ProfileUpdateInput = {
       displayName,
       region,
       locale,
       uiLanguage,
-      providers: providers as unknown as Prisma.InputJsonValue,
-      favoriteMovie: asJsonOrUndef(body.favoriteMovie),
-      favoriteShow: asJsonOrUndef(body.favoriteShow),
+      providers, // Json; Prisma serialiserar array -> jsonb
+      favoriteMovie: favMovieJson,
+      favoriteShow: favShowJson,
+      favoriteGenres,  // text[]
+      dislikedGenres,  // text[]
+      updatedAt: new Date(),
+    };
+
+    const createData: Prisma.ProfileCreateInput = {
+      user: { connect: { id: uid } },     // <-- VIKTIGT: relation, inte bara userId
+      dob: new Date(dob!),                // <-- krävs i CreateInput
+      displayName,
+      region: region!,
+      locale: locale!,
+      uiLanguage: uiLanguage!,
+      providers,
+      favoriteMovie: favMovieJson,
+      favoriteShow: favShowJson,
       favoriteGenres,
       dislikedGenres,
       updatedAt: new Date(),
-      ...(dob ? { dob } : {}), // låt bli att skriva över om tomt
     };
 
-    const profile = await prisma.profile.upsert({
+    // 5) Upsert
+    const saved = await prisma.profile.upsert({
       where: { userId: uid },
-      create: createData,
       update: updateData,
+      create: createData,
       select: {
         userId: true,
         displayName: true,
@@ -120,9 +150,11 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    return NextResponse.json({ ok: true, profile });
+    return NextResponse.json({ ok: true, profile: saved });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Server error";
+    // Server-logg till Vercel
+    console.error("[save-onboarding] error:", err);
+    const message = err instanceof Error ? err.message : "Ett fel uppstod.";
     return NextResponse.json({ ok: false, message }, { status: 500 });
   }
 }
