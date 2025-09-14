@@ -15,7 +15,7 @@ model User {
   planSince     DateTime? @map("plan_since")
   createdAt     DateTime  @default(now()) @map("created_at")
 
-  // NYTT / uppdaterat
+  // Verifiering & login
   emailVerified DateTime? @map("email_verified")
   passwordHash  String?   @map("password_hash")
   lastLoginAt   DateTime? @map("last_login_at")
@@ -28,7 +28,6 @@ model User {
   groupMembers  GroupMember[] @relation("UserGroupMembers")
   groupsCreated Group[]        @relation("UserGroupsCreated")
 
-  // relation till verifications (motsvarar model Verification nedan)
   verifications Verification[]
 
   @@map("users")
@@ -42,15 +41,15 @@ model Profile {
   recycleAfterDays Int       @default(14)     @map("recycle_after_days")
   region           String    @default("SE")
   locale           String    @default("sv-SE")
-  providers        Json      @default("[]")
+  providers        Json      @default("[]")   // OBS: Om Prisma klagar på default för Json, ta bort @default här (DB-default finns).
   updatedAt        DateTime  @default(now())  @map("updated_at")
 
-  // NYTT / uppdaterat
+  // Smakprofil
   displayName     String?   @map("display_name")
-  favoriteMovie   Json?     @map("favorite_movie")   // <— JSON
-  favoriteShow    Json?     @map("favorite_show")    // <— JSON
-  favoriteGenres  String[]  @db.Text @map("favorite_genres")
-  dislikedGenres  String[]  @db.Text @map("disliked_genres")
+  favoriteMovie   Json?     @map("favorite_movie")   // JSONB
+  favoriteShow    Json?     @map("favorite_show")    // JSONB
+  favoriteGenres  String[]  @default([]) @map("favorite_genres")  // text[]
+  dislikedGenres  String[]  @default([]) @map("disliked_genres")  // text[]
 
   user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -69,7 +68,6 @@ model Verification {
 
   @@map("verifications")
 }
-
 
 model Rating {
   id        String   @id
@@ -119,7 +117,7 @@ model Group {
   createdAt DateTime @default(now()) @map("created_at")
 
   members GroupMember[]
-  creator User          @relation("UserGroupsCreated", fields: [createdBy], references: [id], onDelete: Cascade)
+  creator User @relation("UserGroupsCreated", fields: [createdBy], references: [id], onDelete: Cascade)
 
   @@map("groups")
 }
