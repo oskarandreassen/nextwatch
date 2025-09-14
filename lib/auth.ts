@@ -1,32 +1,69 @@
-import { cookies } from 'next/headers';
+// lib/auth.ts
+import { NextResponse, type NextRequest } from 'next/server';
 
-const FIVE_MIN = 5 * 60; // sekunder
-const THIRTY_DAYS = 30 * 24 * 60 * 60;
+/**
+ * Sätter våra sessions-cookies på ett givet NextResponse-objekt.
+ * Använd i route handlers efter lyckad auth/verifiering.
+ */
+export function attachSessionCookies(
+  res: NextResponse,
+  uid: string,
+  opts?: { remember?: boolean }
+) {
+  const oneYear = 60 * 60 * 24 * 365;
+  const thirtyDays = 60 * 60 * 24 * 30;
 
-export function setAuthCookies(uid: string) {
-  const jar = cookies();
-
-  // Beständig användar-cookie
-  jar.set('nw_uid', uid, {
+  res.cookies.set('nw_uid', uid, {
     httpOnly: true,
     sameSite: 'lax',
     secure: true,
     path: '/',
-    maxAge: THIRTY_DAYS,
+    maxAge: opts?.remember ? oneYear : thirtyDays,
   });
 
-  // Senast autentiserad: nu -> används för 5-min auto-pass på /
-  jar.set('nw_last', Date.now().toString(), {
+  // “Senast aktiv” – används för 5-minuterspass på / (landing)
+  res.cookies.set('nw_last', String(Date.now()), {
     httpOnly: true,
     sameSite: 'lax',
     secure: true,
     path: '/',
-    maxAge: FIVE_MIN,
+    maxAge: 60 * 5,
   });
+
+  return res;
 }
 
-export function clearAuthCookies() {
-  const jar = cookies();
-  jar.set('nw_uid', '', { path: '/', maxAge: 0 });
-  jar.set('nw_last', '', { path: '/', maxAge: 0 });
+/**
+ * Hjälpare för redirect + session på en gång.
+ * Skicka in `req` om du skickar relativ path (t.ex. '/swipe') så vi kan skapa absolut URL.
+ */
+export function sessionRedirect(
+  target: string | URL,
+  uid: string,
+  req?: NextRequest,
+  opts?: { remember?: boolean }
+) {
+  const url =
+    target instanceof URL
+      ? target
+      : target.startsWith('http')
+      ? new URL(target)
+      : new URL(target, req?.url ?? process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000');
+
+  const res = NextResponse.redirect(url);
+  return attachSessionCookies(res, uid, opts);
+}
+
+/**
+ * Endast uppdatera "nw_last" på ett befintligt svar (t.ex. ping-endpoint).
+ */
+export function touchLastSeen(res: NextResponse) {
+  res.cookies.set('nw_last', String(Date.now()), {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: true,
+    path: '/',
+    maxAge: 60 * 5,
+  });
+  return res;
 }
