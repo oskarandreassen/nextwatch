@@ -76,14 +76,15 @@ export async function POST(req: NextRequest) {
     const token = crypto.randomBytes(32).toString("hex");
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
-    await prisma.verification.create({      data: {
-        token,
-        user_id: uid,
-        email,
-        name: null,
-        expires_at: expiresAt,
-      },
-    });
+await prisma.verification.create({
+  data: {
+    token,
+    userId: uid,
+    email,
+    name: null,
+    expiresAt,
+  },
+});
 
     // Här kan du skicka e-post med token-länk:
     // ex: https://nextwatch.app/auth/verify?token=XYZ
