@@ -1,63 +1,51 @@
-// lib/email.ts
 import nodemailer from "nodemailer";
-import type SMTPTransport from "nodemailer/lib/smtp-transport";
 
-const {
-  SMTP_HOST,
-  SMTP_PORT,
-  SMTP_SECURE,
-  SMTP_USER,
-  SMTP_PASS,
-  SMTP_FROM = "NextWatch <noreply@nextwatch.se>",
-} = process.env;
+type TransportConfig = {
+  host: string;
+  port: number;
+  secure: boolean; // true => 465 (implicit TLS), false => 587 (STARTTLS)
+  user: string;
+  pass: string;
+  from: string;
+  authMethod: "LOGIN" | "PLAIN" | "CRAM-MD5" | "XOAUTH2" | "OAUTHBEARER";
+};
 
-function parseBool(v?: string) {
-  return String(v ?? "").trim().toLowerCase() === "true";
-}
+const cfg: TransportConfig = {
+  host: process.env.SMTP_HOST ?? "smtp.strato.com",
+  port: Number(process.env.SMTP_PORT ?? "465"),
+  secure: (process.env.SMTP_SECURE ?? "true").toLowerCase() === "true",
+  user: process.env.SMTP_USER ?? "",
+  pass: process.env.SMTP_PASS ?? "",
+  from: process.env.SMTP_FROM ?? process.env.SMTP_USER ?? "",
+  // Viktigt: tvinga LOGIN (Strato gillar inte alltid PLAIN)
+  authMethod: ((process.env.SMTP_AUTH_METHOD ?? "LOGIN").toUpperCase() as TransportConfig["authMethod"]),
+};
 
-function makeTransport(opts?: Partial<SMTPTransport.Options>) {
-  const port = Number(opts?.port ?? SMTP_PORT ?? 587);
-  const secure = opts?.secure ?? parseBool(SMTP_SECURE ?? "false"); // false => STARTTLS
+export const mailer = nodemailer.createTransport({
+  host: cfg.host,
+  port: cfg.port,
+  secure: cfg.secure,
+  auth: { user: cfg.user, pass: cfg.pass },
+  authMethod: cfg.authMethod,
+  requireTLS: !cfg.secure,         // STARTTLS när secure=false (port 587)
+  tls: { ciphers: "TLSv1.2" },     // säkra chiffer
+  connectionTimeout: 15000,
+});
 
-  const options: SMTPTransport.Options = {
-    host: SMTP_HOST,
-    port,
-    secure,                 // false => STARTTLS, true => implicit TLS
-    auth: { user: SMTP_USER!, pass: SMTP_PASS! },
-    requireTLS: !secure,    // tvinga STARTTLS när secure=false
-    connectionTimeout: 15000,
-    logger: true,
-    debug: true,
-  };
+export async function sendVerificationMail(to: string, link: string) {
+  // Verifiera kopplingen och creds innan vi skickar
+  await mailer.verify();
 
-  return nodemailer.createTransport(options);
-}
-
-export async function sendVerificationEmail(to: string, url: string) {
-  const html = `
-    <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif">
-      <h2>Aktivera ditt NextWatch-konto</h2>
-      <p>Klicka på länken för att bekräfta din e-post:</p>
-      <p>
-        <a href="${url}" target="_blank"
-           style="background:#111;color:#fff;padding:10px 16px;border-radius:8px;text-decoration:none">
-           Bekräfta e-post
-        </a>
-      </p>
-      <p>Gäller i 30 minuter.</p>
-    </div>
-  `;
-
-  // 1) Försök med (det vi nu satt i env): 587 + STARTTLS
-  try {
-    const t = makeTransport({ secure: false, port: 587 });
-    await t.verify();
-    await t.sendMail({ from: SMTP_FROM, to, subject: "Bekräfta din e-post till NextWatch", html });
-    return;
-  } catch (err) {
-    // 2) Fallback: 465 implicit TLS (för konton som kräver det)
-    const t2 = makeTransport({ secure: true, port: 465 });
-    await t2.verify();
-    await t2.sendMail({ from: SMTP_FROM, to, subject: "Bekräfta din e-post till NextWatch", html });
-  }
+  return mailer.sendMail({
+    from: cfg.from,
+    to,
+    subject: "Aktivera ditt NextWatch-konto",
+    text: `Hej!\n\nKlicka för att aktivera ditt konto:\n${link}\n\nLänken gäller i 30 minuter.`,
+    html: `
+      <p>Hej!</p>
+      <p>Klicka för att aktivera ditt konto:</p>
+      <p><a href="${link}">${link}</a></p>
+      <p>Länken gäller i 30 minuter.</p>
+    `,
+  });
 }
