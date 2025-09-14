@@ -1,7 +1,8 @@
 // app/api/profile/save-onboarding/route.ts
 import { NextResponse, NextRequest } from "next/server";
 import { cookies } from "next/headers";
-import prisma, { Prisma } from "../../../../lib/prisma";
+import prisma from "../../../../lib/prisma";
+import { Prisma } from "@prisma/client";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
