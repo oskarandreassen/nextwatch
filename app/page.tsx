@@ -4,7 +4,8 @@ import LoginCard from './components/auth/LoginCard';
 import HeroReel from './components/landing/HeroReel';
 
 export default async function HomePage() {
-  const jar = cookies();
+  // ⬇️ cookies() är async här
+  const jar = await cookies();
   const uid = jar.get('nw_uid')?.value ?? null;
   const last = jar.get('nw_last')?.value ?? null;
 
