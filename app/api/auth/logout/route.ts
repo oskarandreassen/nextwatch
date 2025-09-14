@@ -5,6 +5,7 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 export async function POST() {
-  clearAuthCookies();
-  return NextResponse.json({ ok: true });
+  const res = NextResponse.json({ ok: true });
+  clearAuthCookies(res);
+  return res;
 }

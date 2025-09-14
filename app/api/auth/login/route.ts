@@ -6,44 +6,38 @@ import { setAuthCookies } from '../../../../lib/auth';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-type LoginBody = { email: string; password: string };
-
 export async function POST(req: Request) {
   try {
-    const body = (await req.json()) as LoginBody;
-    const email = (body.email || '').trim().toLowerCase();
-    const password = body.password || '';
-
+    const { email, password } = (await req.json()) as {
+      email?: string;
+      password?: string;
+    };
     if (!email || !password) {
-      return NextResponse.json({ ok: false, error: 'Saknar e-post/lösenord' }, { status: 400 });
+      return NextResponse.json({ ok: false, message: 'Missing credentials' }, { status: 400 });
     }
 
+    // ⚠️ Håll detta i linje med ditt faktiska schema (fältnamn)
     const user = await prisma.user.findUnique({
       where: { email },
-      select: { id: true, emailVerified: true, passwordHash: true },
+      select: { id: true, passwordHash: true, emailVerified: true } as const,
     });
 
-    if (!user) {
-      return NextResponse.json({ ok: false, error: 'Fel e-post eller lösenord' }, { status: 401 });
+    if (!user?.passwordHash) {
+      return NextResponse.json({ ok: false, message: 'Invalid credentials' }, { status: 401 });
     }
-
-    if (!user.emailVerified) {
-      return NextResponse.json({ ok: false, error: 'E-post ej verifierad' }, { status: 403 });
-    }
-
-    if (!user.passwordHash) {
-      return NextResponse.json({ ok: false, error: 'Inget lösenord satt för detta konto' }, { status: 403 });
-    }
-
     const ok = await verifyPassword(password, user.passwordHash);
     if (!ok) {
-      return NextResponse.json({ ok: false, error: 'Fel e-post eller lösenord' }, { status: 401 });
+      return NextResponse.json({ ok: false, message: 'Invalid credentials' }, { status: 401 });
+    }
+    if (!user.emailVerified) {
+      return NextResponse.json({ ok: false, message: 'Email not verified' }, { status: 403 });
     }
 
-    setAuthCookies(user.id);
-    return NextResponse.json({ ok: true });
+    const res = NextResponse.json({ ok: true });
+    setAuthCookies(res, user.id);
+    return res;
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Login failed';
-    return NextResponse.json({ ok: false, error: message }, { status: 500 });
+    return NextResponse.json({ ok: false, message }, { status: 500 });
   }
 }
