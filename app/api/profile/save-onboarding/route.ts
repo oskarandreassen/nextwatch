@@ -1,69 +1,91 @@
 import { NextResponse } from "next/server";
-import prisma from "@/lib/prisma";
-import type { Prisma } from "@prisma/client";
+import { cookies } from "next/headers";
+import prisma from "../../../../lib/prisma";
+
+// --------- typer ----------
+type TMDBTitle = {
+  id: number;
+  title: string;
+  year?: string | number | null;
+  poster?: string | null;
+};
+
+type OnboardingPayload = {
+  displayName: string;
+  dob?: string; // "YYYY-MM-DD"
+  region: string;  // "SE"
+  language: string; // "sv"
+  providers: string[]; // ["Netflix","Disney+", ...]
+  favoriteMovie?: TMDBTitle | null;
+  favoriteShow?: TMDBTitle | null;
+  favoriteGenres?: string[];
+  dislikedGenres?: string[];
+};
+
+// Hjälp: parse ISO-date tryggt
+function parseDob(input?: string): Date | undefined {
+  if (!input) return undefined;
+  const d = new Date(input);
+  return Number.isNaN(d.getTime()) ? undefined : d;
+}
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
   try {
-    const body = await req.json() as {
-      uid: string;
-      displayName?: string;
-      dob?: string;                 // "YYYY-MM-DD"
-      region?: string;
-      locale?: string;
-      uiLanguage?: string;
-      providers?: string[];
-      favoriteMovie?: { id: number; title: string; year?: string; poster?: string } | null;
-      favoriteShow?:  { id: number; title: string; year?: string; poster?: string } | null;
-      favoriteGenres?: string[];
-      dislikedGenres?: string[];
-    };
-
-    const {
-      uid, displayName, dob, region, locale, uiLanguage,
-      providers = [],
-      favoriteMovie = null,
-      favoriteShow = null,
-      favoriteGenres = [],
-      dislikedGenres = [],
-    } = body;
-
+    const jar = await cookies();
+    const uid = jar.get("nw_uid")?.value ?? null;
     if (!uid) {
-      return NextResponse.json({ ok: false, message: "Missing uid" }, { status: 400 });
+      return NextResponse.json(
+        { ok: false, error: "Ingen session (nw_uid saknas)." },
+        { status: 401 }
+      );
     }
 
-    const dobDate = dob ? new Date(`${dob}T00:00:00Z`) : undefined;
+    const bodyUnknown: unknown = await req.json();
+    // Minimal runtime-validering
+    const b = bodyUnknown as OnboardingPayload;
 
-    // Bygg "updateData" utan fält som är undefined:
-    const updateData: Prisma.ProfileUpdateInput = {
-      ...(displayName !== undefined ? { displayName } : {}),
-      ...(dobDate ? { dob: dobDate } : {}),
-      ...(region !== undefined ? { region } : {}),
-      ...(locale !== undefined ? { locale } : {}),
-      ...(uiLanguage !== undefined ? { uiLanguage } : {}),
-      ...(providers !== undefined ? { providers } : {}),
-      ...(favoriteMovie !== undefined ? { favoriteMovie: favoriteMovie as Prisma.InputJsonValue } : {}),
-      ...(favoriteShow  !== undefined ? { favoriteShow:  favoriteShow  as Prisma.InputJsonValue } : {}),
-      ...(favoriteGenres !== undefined ? { favoriteGenres } : {}),
-      ...(dislikedGenres !== undefined ? { dislikedGenres } : {}),
+    if (!b.displayName || !b.region || !b.language) {
+      return NextResponse.json(
+        { ok: false, error: "Obligatoriska fält saknas." },
+        { status: 400 }
+      );
+    }
+
+    const dobDate = parseDob(b.dob);
+
+    // Bygg update/create-objekt utan undefined-fältskrivning
+    const updateData: Record<string, unknown> = {
+      displayName: b.displayName,
+      region: b.region,
+      locale: `${b.language}-${b.region}`,
+      uiLanguage: b.language,
+      providers: b.providers ?? [],
+      favoriteMovie: b.favoriteMovie ?? null,
+      favoriteShow: b.favoriteShow ?? null,
+      favoriteGenres: b.favoriteGenres ?? [],
+      dislikedGenres: b.dislikedGenres ?? [],
       updatedAt: new Date(),
     };
+    if (dobDate) updateData.dob = dobDate;
 
-    const createData: Prisma.ProfileCreateInput = {
-      user: { connect: { id: uid } },
-      displayName: displayName ?? null,
-      dob: dobDate ?? new Date("2000-01-01T00:00:00Z"),
-      region: region ?? "SE",
-      locale: locale ?? "sv-SE",
-      uiLanguage: uiLanguage ?? "sv",
-      providers,
-      favoriteMovie: favoriteMovie as Prisma.InputJsonValue,
-      favoriteShow:  favoriteShow  as Prisma.InputJsonValue,
-      favoriteGenres,
-      dislikedGenres,
-      updatedAt: new Date(),
+    const createData: Record<string, unknown> = {
+      userId: uid,
+      displayName: b.displayName,
+      dob: dobDate ?? new Date("2000-01-01"),
+      region: b.region,
+      locale: `${b.language}-${b.region}`,
+      uiLanguage: b.language,
+      providers: b.providers ?? [],
+      favoriteMovie: b.favoriteMovie ?? null,
+      favoriteShow: b.favoriteShow ?? null,
+      favoriteGenres: b.favoriteGenres ?? [],
+      dislikedGenres: b.dislikedGenres ?? [],
     };
 
-    const profile = await prisma.profile.upsert({
+    const saved = await prisma.profile.upsert({
       where: { userId: uid },
       update: updateData,
       create: createData,
@@ -80,9 +102,13 @@ export async function POST(req: Request) {
       },
     });
 
-    return NextResponse.json({ ok: true, profile });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Failed to save onboarding";
-    return NextResponse.json({ ok: false, message }, { status: 500 });
+    return NextResponse.json({ ok: true, profile: saved });
+  } catch (err: unknown) {
+    const message =
+      err instanceof Error ? err.message : "Något gick fel vid sparning.";
+    return NextResponse.json(
+      { ok: false, error: message },
+      { status: 500 }
+    );
   }
 }

@@ -14,65 +14,62 @@ model User {
   plan          String    @default("free")
   planSince     DateTime? @map("plan_since")
   createdAt     DateTime  @default(now()) @map("created_at")
-  emailVerified DateTime? @map("email_verified") // <— NYCKEL: behövs för verifierat konto
+
+  // NYTT / uppdaterat
+  emailVerified DateTime? @map("email_verified")
+  passwordHash  String?   @map("password_hash")
+  lastLoginAt   DateTime? @map("last_login_at")
 
   profile       Profile?
   ratings       Rating[]
   watchlist     watchlist[]
   purchases     Purchase[]
+
   groupMembers  GroupMember[] @relation("UserGroupMembers")
-  groupsCreated Group[]       @relation("UserGroupsCreated")
+  groupsCreated Group[]        @relation("UserGroupsCreated")
 
-  // NYTT:
-  passwordHash String?   @map("password_hash")
-  lastLoginAt  DateTime? @map("last_login_at")
-
-  // relation till verifications
+  // relation till verifications (motsvarar model Verification nedan)
   verifications Verification[]
 
   @@map("users")
 }
 
-// =========================
-// Profile
-// =========================
 model Profile {
-  userId           String   @id @map("user_id")
-  displayName      String?  @map("display_name")
-  dob              DateTime @db.Date
-  uiLanguage       String   @default("sv")       @map("ui_language")
-  yearPreference   String   @default("all")      @map("year_preference")
-  recycleAfterDays Int      @default(14)         @map("recycle_after_days")
-  region           String   @default("SE")
-  locale           String   @default("sv-SE")
-  providers        Json     @default("[]")
-  favoriteMovie    Json?    @map("favorite_movie")
-  favoriteShow     Json?    @map("favorite_show")
-  favoriteGenres   String[] @default([])         @map("favorite_genres")
-  dislikedGenres   String[] @default([])         @map("disliked_genres")
-  updatedAt        DateTime @default(now())      @map("updated_at")
+  userId           String    @id @map("user_id")
+  dob              DateTime  @db.Date
+  uiLanguage       String    @default("sv")   @map("ui_language")
+  yearPreference   String    @default("all")  @map("year_preference")
+  recycleAfterDays Int       @default(14)     @map("recycle_after_days")
+  region           String    @default("SE")
+  locale           String    @default("sv-SE")
+  providers        Json      @default("[]")
+  updatedAt        DateTime  @default(now())  @map("updated_at")
 
-  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // NYTT / uppdaterat
+  displayName     String?   @map("display_name")
+  favoriteMovie   Json?     @map("favorite_movie")   // <— JSON
+  favoriteShow    Json?     @map("favorite_show")    // <— JSON
+  favoriteGenres  String[]  @db.Text @map("favorite_genres")
+  dislikedGenres  String[]  @db.Text @map("disliked_genres")
+
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("profiles")
 }
 
-
-// =========================
-// Verification (ny modell)
-// =========================
 model Verification {
-  token     String   @id
-  userId    String   @map("user_id")
-  email     String
-  name      String?
-  createdAt DateTime @default(now()) @map("created_at")
-  expiresAt DateTime @map("expires_at")
+  token      String   @id
+  userId     String   @map("user_id")
+  email      String
+  name       String?
+  createdAt  DateTime @default(now()) @map("created_at")
+  expiresAt  DateTime @map("expires_at")
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("verifications")
 }
+
 
 model Rating {
   id        String   @id
