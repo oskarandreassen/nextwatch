@@ -13,21 +13,25 @@ model User {
   email         String?   @unique
   plan          String    @default("free")
   planSince     DateTime? @map("plan_since")
-  emailVerified DateTime? @map("email_verified")
   createdAt     DateTime  @default(now()) @map("created_at")
+  emailVerified DateTime? @map("email_verified") // <— NYCKEL: behövs för verifierat konto
 
-  profile   Profile?
-  ratings   Rating[]
-  watchlist watchlist[]
-  purchases Purchase[]
+  profile       Profile?
+  ratings       Rating[]
+  watchlist     watchlist[]
+  purchases     Purchase[]
+  groupMembers  GroupMember[] @relation("UserGroupMembers")
+  groupsCreated Group[]       @relation("UserGroupsCreated")
 
-  groupMembers  GroupMember[]  @relation("UserGroupMembers")
-  groupsCreated Group[]        @relation("UserGroupsCreated")
-  Verification  Verification[]
+  // relation till verifications
+  verifications Verification[]
 
   @@map("users")
 }
 
+// =========================
+// Profile
+// =========================
 model Profile {
   userId           String   @id @map("user_id")
   dob              DateTime @db.Date
@@ -39,16 +43,32 @@ model Profile {
   providers        Json     @default("[]")
   updatedAt        DateTime @default(now()) @map("updated_at")
 
-  // Nya fält för namn + smakprofil
+  // --- NYA fält (mappade till dina snake_case kolumner) ---
   displayName    String?  @map("display_name")
   favoriteMovie  String?  @map("favorite_movie")
   favoriteShow   String?  @map("favorite_show")
-  favoriteGenres String[] @default([]) @db.Text
-  dislikedGenres String[] @default([]) @db.Text
+  favoriteGenres String[] @default([]) @map("favorite_genres")
+  dislikedGenres String[] @default([]) @map("disliked_genres")
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("profiles")
+}
+
+// =========================
+// Verification (ny modell)
+// =========================
+model Verification {
+  token     String   @id
+  userId    String   @map("user_id")
+  email     String
+  name      String?
+  createdAt DateTime @default(now()) @map("created_at")
+  expiresAt DateTime @map("expires_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("verifications")
 }
 
 model Rating {
@@ -114,18 +134,4 @@ model GroupMember {
 
   @@id([groupCode, userId])
   @@map("group_members")
-}
-
-// Verifierings-tokens (tabell: verifications)
-model Verification {
-  token     String   @id
-  userId    String   @map("user_id")
-  email     String
-  name      String?
-  createdAt DateTime @default(now()) @map("created_at")
-  expiresAt DateTime @map("expires_at")
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@map("verifications")
 }
