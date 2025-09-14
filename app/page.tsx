@@ -3,6 +3,13 @@ import { redirect } from 'next/navigation';
 import LoginCard from './components/auth/LoginCard';
 import HeroReel from './components/landing/HeroReel';
 
+
+import InlineLogin from "./components/auth/InlineLogin";
+// ...
+{/* Visa login om användaren inte är inloggad */}
+<InlineLogin />
+
+
 export default async function HomePage() {
   // ⬇️ cookies() är async här
   const jar = await cookies();

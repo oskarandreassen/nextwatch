@@ -38,26 +38,25 @@ model User {
 // =========================
 model Profile {
   userId           String   @id @map("user_id")
+  displayName      String?  @map("display_name")
   dob              DateTime @db.Date
-  uiLanguage       String   @default("sv") @map("ui_language")
-  yearPreference   String   @default("all") @map("year_preference")
-  recycleAfterDays Int      @default(14) @map("recycle_after_days")
+  uiLanguage       String   @default("sv")       @map("ui_language")
+  yearPreference   String   @default("all")      @map("year_preference")
+  recycleAfterDays Int      @default(14)         @map("recycle_after_days")
   region           String   @default("SE")
   locale           String   @default("sv-SE")
   providers        Json     @default("[]")
-  updatedAt        DateTime @default(now()) @map("updated_at")
+  favoriteMovie    Json?    @map("favorite_movie")
+  favoriteShow     Json?    @map("favorite_show")
+  favoriteGenres   String[] @default([])         @map("favorite_genres")
+  dislikedGenres   String[] @default([])         @map("disliked_genres")
+  updatedAt        DateTime @default(now())      @map("updated_at")
 
-  // --- NYA fält (mappade till dina snake_case kolumner) ---
-  displayName    String?  @map("display_name")
-  favoriteMovie  String?  @map("favorite_movie")
-  favoriteShow   String?  @map("favorite_show")
-  favoriteGenres String[] @default([]) @map("favorite_genres")
-  dislikedGenres String[] @default([]) @map("disliked_genres")
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("profiles")
 }
+
 
 // =========================
 // Verification (ny modell)
