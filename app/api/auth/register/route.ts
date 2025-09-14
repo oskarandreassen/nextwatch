@@ -67,7 +67,7 @@ export async function POST(req: NextRequest) {
       where: { id: uid },
       data: {
         email,
-        password_hash: hash,
+        passwordHash: hash,
         // email_verified lämnas null tills verifikation
       },
     });
