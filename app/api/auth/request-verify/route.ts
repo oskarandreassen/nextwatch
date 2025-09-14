@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { randomUUID } from "crypto";
 import prisma from "../../../../lib/prisma";
-import { sendVerificationEmail } from "../../../../lib/email";
+import { sendVerificationMail } from "../../../../lib/email";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
