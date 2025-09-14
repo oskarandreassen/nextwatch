@@ -41,11 +41,11 @@ model Profile {
   providers        Json     @default("[]")
   updatedAt        DateTime @default(now()) @map("updated_at")
 
-  // Smakprofil
-  favoriteMovie  String?
-  favoriteShow   String?
-  favoriteGenres String[] @default([]) @db.Text
-  dislikedGenres String[] @default([]) @db.Text
+  // ✅ SNAKE_CASE i DB ↔ camelCase i Prisma
+  favoriteMovie  String?  @map("favorite_movie")
+  favoriteShow   String?  @map("favorite_show")
+  favoriteGenres String[] @default([]) @map("favorite_genres") @db.Text
+  dislikedGenres String[] @default([]) @map("disliked_genres") @db.Text
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
