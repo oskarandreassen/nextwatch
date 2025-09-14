@@ -7,7 +7,7 @@ import { Prisma } from "@prisma/client";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// ——— Helpers ———
+// —— Helpers ——
 function toNumber(n: unknown): number | null {
   if (typeof n === "number" && Number.isFinite(n)) return n;
   if (typeof n === "string" && n.trim() !== "" && !Number.isNaN(Number(n))) {
@@ -16,13 +16,6 @@ function toNumber(n: unknown): number | null {
   return null;
 }
 
-/**
- * Tillåt flera format från klienten:
- *  - string  -> { title: str }
- *  - { id, title } eller { id, name }
- *  - { tmdbId, name/title, ... }
- *  - null/undefined -> Prisma.JsonNull
- */
 function normalizeFavorite(
   v: unknown
 ): Prisma.InputJsonValue | Prisma.NullableJsonNullValueInput {
@@ -72,9 +65,7 @@ function toProvidersJson(p: unknown): Prisma.InputJsonValue {
   if (Array.isArray(p)) {
     const norm = p
       .map((x) => {
-        if (typeof x === "string" || typeof x === "number") {
-          return String(x);
-        }
+        if (typeof x === "string" || typeof x === "number") return String(x);
         if (x && typeof x === "object") {
           const rec = x as Record<string, unknown>;
           const id =
@@ -88,21 +79,31 @@ function toProvidersJson(p: unknown): Prisma.InputJsonValue {
       .filter((v): v is string => v !== null);
     return norm as unknown as Prisma.InputJsonValue;
   }
-  // Fallback: kapsla in vad som än kom
   return (p ?? []) as Prisma.InputJsonValue;
 }
 
-// ——— Route ———
+// Centraliserad felrespons (med debug)
+function fail(
+  status: number,
+  message: string,
+  debugOn: boolean,
+  extra?: Record<string, unknown>
+) {
+  const body: Record<string, unknown> = { ok: false, message };
+  if (debugOn && extra) body.debug = extra;
+  return NextResponse.json(body, { status });
+}
+
+// —— Route ——
 export async function POST(req: NextRequest) {
+  const debug = new URL(req.url).searchParams.get("debug") === "1";
+
   try {
     // 1) Cookie (Next.js 15: async)
     const jar = await cookies();
     const uid = jar.get("nw_uid")?.value ?? null;
     if (!uid) {
-      return NextResponse.json(
-        { ok: false, message: "Ingen session hittades (nw_uid saknas)." },
-        { status: 401 }
-      );
+      return fail(401, "Ingen session hittades (nw_uid saknas).", debug);
     }
 
     // 2) Body
@@ -132,7 +133,7 @@ export async function POST(req: NextRequest) {
       dislikedGenres = [],
     } = body ?? {};
 
-    // 3) Validering
+    // 3) Basvalidering
     const missing: string[] = [];
     if (!displayName?.trim()) missing.push("displayName");
     if (!dob?.trim()) missing.push("dob");
@@ -140,18 +141,34 @@ export async function POST(req: NextRequest) {
     if (!locale?.trim()) missing.push("locale");
     if (!uiLanguage?.trim()) missing.push("uiLanguage");
     if (missing.length) {
-      return NextResponse.json(
-        { ok: false, message: `Obligatoriska fält saknas: ${missing.join(", ")}` },
-        { status: 400 }
+      return fail(
+        400,
+        `Obligatoriska fält saknas: ${missing.join(", ")}`,
+        debug,
+        { received: body }
       );
     }
 
-    // 4) Normalisering
+    // 4) Säkerställ att user finns (annars FK-fel på connect)
+    const user = await prisma.user.findUnique({
+      where: { id: uid },
+      select: { id: true, email: true },
+    });
+    if (!user) {
+      return fail(
+        401,
+        "Ogiltig session: användaren finns inte. Logga in igen.",
+        debug,
+        { uidFromCookie: uid }
+      );
+    }
+
+    // 5) Normalisering
     const favMovieJson = normalizeFavorite(favoriteMovie);
     const favShowJson = normalizeFavorite(favoriteShow);
     const providersJson = toProvidersJson(providers);
 
-    // 5) Upsert
+    // 6) Upsert
     const updateData: Prisma.ProfileUpdateInput = {
       displayName,
       region,
@@ -160,14 +177,14 @@ export async function POST(req: NextRequest) {
       providers: providersJson,
       favoriteMovie: favMovieJson,
       favoriteShow: favShowJson,
-      favoriteGenres, // text[]
-      dislikedGenres, // text[]
+      favoriteGenres,
+      dislikedGenres,
       updatedAt: new Date(),
     };
 
     const createData: Prisma.ProfileCreateInput = {
       user: { connect: { id: uid } },
-      dob: new Date(dob!),
+      dob: new Date(dob!), // DATE i DB; Prisma Create kräver den här i din modell
       displayName,
       region: region!,
       locale: locale!,
@@ -199,8 +216,31 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ ok: true, profile: saved });
   } catch (err) {
+    // Prisma-felkoder: https://www.prisma.io/docs/orm/reference/error-reference
+    if (err instanceof Prisma.PrismaClientKnownRequestError) {
+      if (err.code === "P2003") {
+        // Foreign key
+        return fail(409, "Databasfel (FK). Kontrollera att user/profil stämmer.", true, {
+          code: err.code,
+          meta: err.meta,
+        });
+      }
+      if (err.code === "P2002") {
+        // Unique constraint
+        return fail(409, "Databasfel (unik constraint).", true, {
+          code: err.code,
+          meta: err.meta,
+        });
+      }
+      if (err.code === "P2025") {
+        // Record not found
+        return fail(404, "Post saknas (P2025).", true, { code: err.code, meta: err.meta });
+      }
+      return fail(500, "Prisma-fel.", true, { code: err.code, meta: err.meta });
+    }
+
     console.error("[save-onboarding] error:", err);
     const message = err instanceof Error ? err.message : "Ett fel uppstod.";
-    return NextResponse.json({ ok: false, message }, { status: 500 });
+    return fail(500, message, true);
   }
 }
