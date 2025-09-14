@@ -83,26 +83,18 @@ function toProvidersJson(p: unknown): Prisma.InputJsonValue {
 }
 
 // ——— DOB extraction ———
-// Försöker hitta födelsedatum i flera alias & strukturer.
-// Returnerar ISO-sträng "YYYY-MM-DD" om möjligt, annars null.
-function extractDob(body: unknown): string | null {
-  if (!body || typeof body !== "object") return null;
-  const o = body as Record<string, unknown>;
+function extractDob(body: Record<string, unknown>): string | null {
+  const candidates: unknown[] = [
+    body.dob,
+    body.dateOfBirth,
+    body.birthdate,
+    body.birthday,
+    body.dobISO,
+    body.birth_date,
+  ];
 
-  const candidates: unknown[] = [];
-
-  // Platta fält
-  candidates.push(
-    o.dob,
-    o.dateOfBirth,
-    o.birthdate,
-    o.birthday,
-    o.dobISO,
-    o.birth_date
-  );
-
-  // Vanliga nästlade
-  const nestedPaths = [
+  // Vanliga nästlade alias
+  const nestedPaths: string[][] = [
     ["profile", "dob"],
     ["form", "dob"],
     ["data", "dob"],
@@ -111,9 +103,13 @@ function extractDob(body: unknown): string | null {
     ["values", "dob"],
   ];
   for (const path of nestedPaths) {
-    let cur: any = o;
+    let cur: unknown = body;
     for (const key of path) {
-      if (cur && typeof cur === "object" && key in cur) {
+      if (
+        cur &&
+        typeof cur === "object" &&
+        key in (cur as Record<string, unknown>)
+      ) {
         cur = (cur as Record<string, unknown>)[key];
       } else {
         cur = undefined;
@@ -123,38 +119,34 @@ function extractDob(body: unknown): string | null {
     if (cur !== undefined) candidates.push(cur);
   }
 
-  // Objekt med {year,month,day}
+  // Objekt {year,month,day}
   const ymdObj = candidates.find(
-    (c) =>
-      c &&
+    (c): c is { year: string | number; month: string | number; day: string | number } =>
       typeof c === "object" &&
-      "year" in (c as any) &&
-      "month" in (c as any) &&
-      "day" in (c as any)
-  ) as any;
+      c !== null &&
+      "year" in c &&
+      "month" in c &&
+      "day" in c
+  );
   if (ymdObj) {
     const y = String(ymdObj.year).padStart(4, "0");
     const m = String(ymdObj.month).padStart(2, "0");
     const d = String(ymdObj.day).padStart(2, "0");
-    if (/^\d{4}-\d{2}-\d{2}$/.test(`${y}-${m}-${d}`)) return `${y}-${m}-${d}`;
+    return `${y}-${m}-${d}`;
   }
 
-  // Första icke-tomma kandidat
+  // Första string
   const first = candidates.find(
-    (c) => typeof c === "string" && c.trim().length > 0
-  ) as string | undefined;
+    (c): c is string => typeof c === "string" && c.trim().length > 0
+  );
   if (!first) return null;
 
   const s = first.trim();
 
-  // Tillåt "YYYY-MM-DD" (input type="date")
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-
-  // Tillåt "YYYY/MM/DD" eller "YYYY.MM.DD"
   const s1 = s.replace(/[/.]/g, "-");
   if (/^\d{4}-\d{2}-\d{2}$/.test(s1)) return s1;
 
-  // Tillåt svenska format "DD/MM/YYYY" eller "DD.MM.YYYY" → normalisera
   const sv = s.replace(/[.]/g, "/");
   const m = sv.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
   if (m) {
@@ -164,7 +156,6 @@ function extractDob(body: unknown): string | null {
     return `${yyyy}-${mm}-${dd}`;
   }
 
-  // Sista utväg: Date-parse och formattera till YYYY-MM-DD om giltigt
   const dt = new Date(s);
   if (!Number.isNaN(dt.getTime())) {
     const yyyy = String(dt.getFullYear());
@@ -193,17 +184,14 @@ export async function POST(req: NextRequest) {
   const debug = new URL(req.url).searchParams.get("debug") === "1";
 
   try {
-    // 1) Cookie (Next.js 15: async)
     const jar = await cookies();
     const uid = jar.get("nw_uid")?.value ?? null;
     if (!uid) {
       return fail(401, "Ingen session hittades (nw_uid saknas).", debug);
     }
 
-    // 2) Body
     const body = (await req.json()) as Record<string, unknown>;
 
-    // 3) Läs fält (tolerant)
     const displayName = (body.displayName as string | undefined)?.trim();
     const region = (body.region as string | undefined)?.trim();
     const locale = (body.locale as string | undefined)?.trim();
@@ -214,9 +202,8 @@ export async function POST(req: NextRequest) {
     const favoriteGenres = (body.favoriteGenres as string[] | undefined) ?? [];
     const dislikedGenres = (body.dislikedGenres as string[] | undefined) ?? [];
 
-    const dobStr = extractDob(body); // ← NYCKELN
+    const dobStr = extractDob(body);
 
-    // 4) Basvalidering
     const missing: string[] = [];
     if (!displayName) missing.push("displayName");
     if (!dobStr) missing.push("dob");
@@ -229,23 +216,20 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // 5) Säkerställ user finns
     const user = await prisma.user.findUnique({
       where: { id: uid },
       select: { id: true },
     });
     if (!user) {
-      return fail(401, "Ogiltig session: användaren finns inte. Logga in igen.", debug, {
+      return fail(401, "Ogiltig session: användaren finns inte.", debug, {
         uidFromCookie: uid,
       });
     }
 
-    // 6) Normalisering
     const favMovieJson = normalizeFavorite(favoriteMovie);
     const favShowJson = normalizeFavorite(favoriteShow);
     const providersJson = toProvidersJson(providers);
 
-    // 7) Upsert
     const updateData: Prisma.ProfileUpdateInput = {
       displayName,
       region,
@@ -261,11 +245,11 @@ export async function POST(req: NextRequest) {
 
     const createData: Prisma.ProfileCreateInput = {
       user: { connect: { id: uid } },
-      dob: new Date(dobStr), // DB typ DATE
+      dob: new Date(dobStr),
       displayName,
-      region,
-      locale,
-      uiLanguage,
+      region: region!,
+      locale: locale!,
+      uiLanguage: uiLanguage!,
       providers: providersJson,
       favoriteMovie: favMovieJson,
       favoriteShow: favShowJson,
