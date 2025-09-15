@@ -5,19 +5,13 @@ import prisma from "../../../../lib/prisma";
 import { Prisma } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import crypto from "crypto";
+import nodemailer from "nodemailer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function jsonRes(
-  status: number,
-  message: string,
-  extra?: Record<string, unknown>
-) {
-  const body: Record<string, unknown> = {
-    ok: status >= 200 && status < 300,
-    message,
-  };
+function jsonRes(status: number, message: string, extra?: Record<string, unknown>) {
+  const body: Record<string, unknown> = { ok: status >= 200 && status < 300, message };
   if (extra) body.extra = extra;
   return NextResponse.json(body, { status });
 }
@@ -29,37 +23,41 @@ function computeOrigin(req: NextRequest): string {
   return `${u.protocol}//${u.host}`;
 }
 
-async function sendVerifyEmail(to: string, link: string) {
-  const apiKey = process.env.RESEND_API_KEY;
-  const from = process.env.RESEND_FROM || "NextWatch <noreply@nextwatch.se>";
-  if (!apiKey) {
-    return { ok: false as const, reason: "missing_resend_api_key" as const };
+function asBool(v?: string | null, def = false) {
+  if (!v) return def;
+  return ["true", "1", "yes", "on"].includes(String(v).toLowerCase());
+}
+function asNum(v?: string | null, def = 587) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : def;
+}
+
+async function sendEmailSMTP(to: string, subject: string, html: string) {
+  const host = process.env.SMTP_HOST;
+  const user = process.env.SMTP_USER;
+  const pass = process.env.SMTP_PASS;
+  const port = asNum(process.env.SMTP_PORT, 587);
+  const secure = asBool(process.env.SMTP_SECURE, port === 465);
+  const from = process.env.SMTP_FROM || `NextWatch <${user ?? "noreply@localhost"}>`;
+
+  if (!host || !user || !pass) {
+    return { sent: false as const, reason: "missing_smtp_env" as const, detail: { host, user, pass } };
   }
-  const html = `
-    <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif">
-      <h2>Bekräfta din e-post</h2>
-      <p>Klicka på länken nedan för att verifiera din e-postadress:</p>
-      <p><a href="${link}" style="display:inline-block;padding:10px 14px;background:#111;color:#fff;border-radius:8px;text-decoration:none">Verifiera e-post</a></p>
-      <p>Giltig i 24 timmar. Om knappen inte fungerar, kopiera länken:</p>
-      <p><code>${link}</code></p>
-    </div>
-  `;
-  const res = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ from, to, subject: "Bekräfta din e-post", html }),
+
+  const transporter = nodemailer.createTransport({
+    host,
+    port,
+    secure, // true = 465 (SMTPS), false = STARTTLS 587
+    auth: { user, pass },
   });
-  const provider = await res.json().catch(() => ({}));
-  return { ok: res.ok, status: res.status, provider };
+
+  const info = await transporter.sendMail({ from, to, subject, html });
+  // nodemailer ger id/response
+  return { sent: true as const, provider: { messageId: info.messageId, response: info.response } };
 }
 
 export async function POST(req: NextRequest) {
   try {
-    const debug = new URL(req.url).searchParams.get("debug") === "1";
-
     const jar = await cookies();
     const uid = jar.get("nw_uid")?.value ?? null;
     if (!uid) return jsonRes(401, "Ingen session. Logga in igen.");
@@ -69,16 +67,14 @@ export async function POST(req: NextRequest) {
     const password = (body.password ?? "").trim();
     if (!email || !password) return jsonRes(400, "E-post och lösenord krävs.");
 
-    // Preflight: kolumner
+    // Preflight: kontrollera att nödvändiga kolumner finns
     const [usersCols, verCols] = await Promise.all([
       prisma.$queryRaw<Array<{ column_name: string }>>`
         SELECT column_name FROM information_schema.columns
-        WHERE table_schema = 'public' AND table_name = 'users'
-      `,
+        WHERE table_schema='public' AND table_name='users'`,
       prisma.$queryRaw<Array<{ column_name: string }>>`
         SELECT column_name FROM information_schema.columns
-        WHERE table_schema = 'public' AND table_name = 'verifications'
-      `,
+        WHERE table_schema='public' AND table_name='verifications'`,
     ]);
     const u = new Set(usersCols.map((r) => r.column_name));
     const v = new Set(verCols.map((r) => r.column_name));
@@ -102,28 +98,33 @@ export async function POST(req: NextRequest) {
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
     await prisma.$transaction([
-      prisma.user.update({
-        where: { id: uid },
-        data: { email, passwordHash: hash },
-      }),
-      prisma.verification.create({
-        data: { token, userId: uid, email, name: null, expiresAt },
-      }),
+      prisma.user.update({ where: { id: uid }, data: { email, passwordHash: hash } }),
+      prisma.verification.create({ data: { token, userId: uid, email, name: null, expiresAt } }),
     ]);
 
     const origin = computeOrigin(req);
     const link = `${origin}/auth/verify?token=${token}`;
-    const mailRes = await sendVerifyEmail(email, link);
 
-    // I debug-läge skickar vi tillbaka hela provider-responsen
+    const html = `
+      <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif">
+        <h2>Bekräfta din e-post</h2>
+        <p>Klicka på knappen för att verifiera din e-postadress.</p>
+        <p><a href="${link}" style="display:inline-block;padding:10px 14px;background:#0ea5e9;color:#fff;border-radius:8px;text-decoration:none">Verifiera e-post</a></p>
+        <p>Om knappen inte fungerar, kopiera länken:</p>
+        <p><code>${link}</code></p>
+        <p>Giltig i 24 timmar.</p>
+      </div>
+    `;
+    const mailRes = await sendEmailSMTP(email, "Bekräfta din e-post", html);
+
     return NextResponse.json({
       ok: true,
-      message: mailRes.ok
+      message: mailRes.sent
         ? "Konto uppdaterat. Verifieringslänk skickad."
         : "Konto uppdaterat. Kunde inte skicka e-post – kopiera länken nedan.",
       verifyUrl: link,
-      emailSent: mailRes.ok,
-      ...(debug ? { emailProvider: mailRes.provider, emailStatus: mailRes.status } : {}),
+      emailSent: mailRes.sent,
+      emailProvider: mailRes.provider ?? mailRes.reason ?? null,
     });
   } catch (err) {
     if (err instanceof Prisma.PrismaClientKnownRequestError) {

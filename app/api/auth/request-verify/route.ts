@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import prisma from "../../../../lib/prisma";
 import { randomBytes } from "crypto";
+import nodemailer from "nodemailer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,70 +14,66 @@ function computeOrigin(req: NextRequest): string {
   const u = new URL(req.url);
   return `${u.protocol}//${u.host}`;
 }
+function asBool(v?: string | null, def = false) {
+  if (!v) return def;
+  return ["true", "1", "yes", "on"].includes(String(v).toLowerCase());
+}
+function asNum(v?: string | null, def = 587) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : def;
+}
+async function sendEmailSMTP(to: string, subject: string, html: string) {
+  const host = process.env.SMTP_HOST;
+  const user = process.env.SMTP_USER;
+  const pass = process.env.SMTP_PASS;
+  const port = asNum(process.env.SMTP_PORT, 587);
+  const secure = asBool(process.env.SMTP_SECURE, port === 465);
+  const from = process.env.SMTP_FROM || `NextWatch <${user ?? "noreply@localhost"}>`;
 
-async function sendVerifyEmail(to: string, link: string) {
-  const apiKey = process.env.RESEND_API_KEY;
-  const from = process.env.RESEND_FROM || "NextWatch <noreply@nextwatch.se>";
-  if (!apiKey) return { sent: false as const, reason: "missing_resend_api_key" as const };
-
-  const html = `
-    <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif">
-      <h2>Bekräfta din e-post</h2>
-      <p>Klicka på länken nedan för att verifiera din e-postadress:</p>
-      <p><a href="${link}" style="display:inline-block;padding:10px 14px;background:#111;color:#fff;border-radius:8px;text-decoration:none">Verifiera e-post</a></p>
-      <p>Giltig i 24 timmar.</p>
-    </div>
-  `;
-
-  const res = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-    body: JSON.stringify({ from, to, subject: "Bekräfta din e-post", html }),
-  });
-  const json = (await res.json().catch(() => ({}))) as unknown;
-  return { sent: res.ok, provider: json };
+  if (!host || !user || !pass) {
+    return { sent: false as const, reason: "missing_smtp_env" as const, detail: { host, user, pass } };
+  }
+  const transporter = nodemailer.createTransport({ host, port, secure, auth: { user, pass } });
+  const info = await transporter.sendMail({ from, to, subject, html });
+  return { sent: true as const, provider: { messageId: info.messageId, response: info.response } };
 }
 
 export async function GET(req: NextRequest) {
-  // Använd absolut URL i redirect för att undvika varningar
   return NextResponse.redirect(new URL("/auth/verify/sent", req.url));
 }
 
 export async function POST(req: NextRequest) {
   try {
-    // IMPORTANT: await cookies()
     const jar = await cookies();
     const uid = jar.get("nw_uid")?.value ?? null;
-    if (!uid) {
-      return NextResponse.json({ ok: false, message: "Ingen session." }, { status: 401 });
-    }
+    if (!uid) return NextResponse.json({ ok: false, message: "Ingen session." }, { status: 401 });
 
-    const user = await prisma.user.findUnique({
-      where: { id: uid },
-      select: { id: true, email: true },
-    });
-    if (!user?.email) {
-      return NextResponse.json({ ok: false, message: "Ingen e-post registrerad." }, { status: 400 });
-    }
+    const u = await prisma.user.findUnique({ where: { id: uid }, select: { id: true, email: true } });
+    if (!u?.email) return NextResponse.json({ ok: false, message: "Ingen e-post registrerad." }, { status: 400 });
 
     await prisma.verification.deleteMany({ where: { userId: uid } });
 
     const token = randomBytes(32).toString("hex");
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
-
-    await prisma.verification.create({
-      data: { token, userId: uid, email: user.email, name: null, expiresAt },
-    });
+    await prisma.verification.create({ data: { token, userId: uid, email: u.email, name: null, expiresAt } });
 
     const origin = computeOrigin(req);
     const link = `${origin}/auth/verify?token=${token}`;
-    const mailRes = await sendVerifyEmail(user.email, link);
+    const html = `
+      <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif">
+        <h2>Bekräfta din e-post</h2>
+        <p><a href="${link}" style="display:inline-block;padding:10px 14px;background:#0ea5e9;color:#fff;border-radius:8px;text-decoration:none">Verifiera e-post</a></p>
+        <p>Giltig i 24 timmar.</p>
+      </div>
+    `;
+    const mailRes = await sendEmailSMTP(u.email, "Bekräfta din e-post", html);
 
     return NextResponse.json({
       ok: true,
       message: mailRes.sent ? "Verifieringslänk skickad." : "Länk skapad men e-post kunde inte skickas.",
       verifyUrl: link,
       emailSent: mailRes.sent,
+      emailProvider: mailRes.provider ?? mailRes.reason ?? null,
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Internt fel.";
