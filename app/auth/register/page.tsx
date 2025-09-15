@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 
 export default function RegisterPage() {
@@ -8,13 +8,13 @@ export default function RegisterPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
-  const [msg, setMsg] = useState<string | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [ok, setOk] = useState<string | null>(null);
 
-  async function submit(e: React.FormEvent) {
+  async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setErr(null);
-    setMsg(null);
+    setError(null);
+    setOk(null);
     setLoading(true);
     try {
       const res = await fetch("/api/auth/register", {
@@ -23,16 +23,14 @@ export default function RegisterPage() {
         body: JSON.stringify({ email, password }),
       });
       const data = await res.json();
-      if (!res.ok || !data?.ok) throw new Error(data?.message || "Ett fel uppstod.");
-
-      setMsg(
-        "Klart! Kolla din mejl för verifikation (eller använd devToken i svar tills e-post är på plats)."
-      );
-
-      // Efter registrering kan vi gå till /swipe (eller visa separat verify-sida)
-      setTimeout(() => router.replace("/swipe"), 800);
-    } catch (e: unknown) {
-      setErr(e instanceof Error ? e.message : "Ett fel uppstod.");
+      if (!res.ok || !data?.ok) {
+        throw new Error(data?.message || "Ett fel uppstod.");
+      }
+      setOk("Klart! Kolla din e-post för verifikation.");
+      // vidare till appen – ändra till /auth/verify om du bygger verify-sida
+      setTimeout(() => router.replace("/swipe"), 600);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Ett fel uppstod.");
     } finally {
       setLoading(false);
     }
@@ -40,43 +38,59 @@ export default function RegisterPage() {
 
   return (
     <div className="mx-auto max-w-md p-6">
-      <h1 className="text-xl font-semibold mb-4">Skapa inloggning</h1>
-      {err && <div className="mb-3 rounded bg-red-500/10 text-red-600 p-3 text-sm">{err}</div>}
-      {msg && <div className="mb-3 rounded bg-emerald-500/10 text-emerald-400 p-3 text-sm">{msg}</div>}
-      <form onSubmit={submit} className="space-y-3">
-        <label className="block">
-          <span className="text-sm">E-post</span>
-          <input
-            type="email"
-            className="mt-1 w-full rounded border bg-transparent p-2"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="du@exempel.se"
-            required
-          />
-        </label>
+      <div className="rounded-2xl border border-white/10 bg-white/5 p-6 shadow-lg">
+        <h1 className="text-2xl font-semibold tracking-tight mb-4">Skapa inloggning</h1>
+        <p className="text-sm text-white/60 mb-4">
+          Ange e-post och välj ett lösenord för att slutföra kontot.
+        </p>
 
-        <label className="block">
-          <span className="text-sm">Lösenord</span>
-          <input
-            type="password"
-            className="mt-1 w-full rounded border bg-transparent p-2"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="••••••••"
-            required
-            minLength={8}
-          />
-        </label>
+        {error && (
+          <div className="mb-3 rounded-lg bg-red-500/10 text-red-400 px-3 py-2 text-sm">
+            {error}
+          </div>
+        )}
+        {ok && (
+          <div className="mb-3 rounded-lg bg-emerald-500/10 text-emerald-400 px-3 py-2 text-sm">
+            {ok}
+          </div>
+        )}
 
-        <button
-          type="submit"
-          disabled={loading}
-          className="mt-2 w-full rounded bg-white/10 py-2 hover:bg-white/20 disabled:opacity-50"
-        >
-          {loading ? "Skapar…" : "Fortsätt"}
-        </button>
-      </form>
+        <form onSubmit={onSubmit} className="space-y-3">
+          <div>
+            <label className="text-sm text-white/70">E-post</label>
+            <input
+              type="email"
+              className="mt-1 w-full rounded-xl border border-white/10 bg-black/40 p-3 outline-none focus:ring-2 focus:ring-white/20"
+              placeholder="du@exempel.se"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              required
+            />
+          </div>
+
+          <div>
+            <label className="text-sm text-white/70">Lösenord</label>
+            <input
+              type="password"
+              className="mt-1 w-full rounded-xl border border-white/10 bg-black/40 p-3 outline-none focus:ring-2 focus:ring-white/20"
+              placeholder="••••••••"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              required
+              minLength={8}
+            />
+            <p className="mt-1 text-xs text-white/40">Minst 8 tecken.</p>
+          </div>
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="mt-2 w-full rounded-2xl bg-white/15 py-3 font-medium hover:bg-white/25 disabled:opacity-50"
+          >
+            {loading ? "Sparar…" : "Fortsätt"}
+          </button>
+        </form>
+      </div>
     </div>
   );
 }

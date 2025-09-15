@@ -20,11 +20,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const body = (await req.json()) as {
-      email?: string;
-      password?: string;
-    };
-
+    const body = (await req.json()) as { email?: string; password?: string };
     const email = (body.email || "").trim().toLowerCase();
     const password = (body.password || "").trim();
 
@@ -35,10 +31,10 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Finns användaren?
+    // Säkerställ att user finns
     const user = await prisma.user.findUnique({
       where: { id: uid },
-      select: { id: true, email: true },
+      select: { id: true },
     });
     if (!user) {
       return NextResponse.json(
@@ -47,7 +43,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Är e-post upptagen av annan user?
+    // E-post upptagen av någon annan?
     const taken = await prisma.user.findFirst({
       where: { email, NOT: { id: uid } },
       select: { id: true },
@@ -59,41 +55,38 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Hasha lösenord
+    // Hasha lösen
     const hash = await bcrypt.hash(password, 12);
 
-    // Uppdatera user
+    // Uppdatera användarens login-fält
     await prisma.user.update({
       where: { id: uid },
       data: {
         email,
-        passwordHash: hash,
-        // email_verified lämnas null tills verifikation
+        passwordHash: hash, // ✅ camelCase (DB: password_hash)
+        // emailVerified lämnas null tills verifikation
       },
     });
 
-    // Skapa verifikationstoken (giltig i 24h)
+    // Skapa verifieringstoken (24h)
     const token = crypto.randomBytes(32).toString("hex");
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
-await prisma.verification.create({
-  data: {
-    token,
-    userId: uid,
-    email,
-    name: null,
-    expiresAt,
-  },
-});
+    await prisma.verification.create({
+      data: {
+        token,
+        userId: uid,     // ✅ camelCase (DB: user_id)
+        email,
+        name: null,
+        expiresAt,       // ✅ camelCase (DB: expires_at)
+      },
+    });
 
-    // Här kan du skicka e-post med token-länk:
-    // ex: https://nextwatch.app/auth/verify?token=XYZ
-    // (Implementera din mail-provider senare)
     return NextResponse.json({
       ok: true,
       message: "Konto uppdaterat. Verifieringslänk skapad.",
-      // dev-hjälp: skicka tillbaka token tills e-post är på plats
-      devToken: token,
+      // tills mailutskick är på plats kan du läsa token i network-svaret:
+      // devToken: token,
     });
   } catch (err) {
     if (err instanceof Prisma.PrismaClientKnownRequestError) {
