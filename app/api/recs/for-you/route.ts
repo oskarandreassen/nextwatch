@@ -1,124 +1,96 @@
 // app/api/recs/for-you/route.ts
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import prisma from "../../../../lib/prisma";
-import { tmdbGet, TmdbPaged, READ_TOKEN } from "../../../../lib/tmdb";
+import {
+  namesToGenreIds,
+  discoverByGenres,
+  trendingFallback,
+  tmdbPoster,
+  TmdbMovie,
+  TmdbTv,
+} from "../../../../lib/tmdb";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-type MediaType = "movie" | "tv";
-
-type TmdbItem = {
-  id: number;
-  title?: string;
-  name?: string;
-  poster_path?: string | null;
-  release_date?: string | null;
-  first_air_date?: string | null;
-  vote_average?: number | null;
-};
-
 type Card = {
   id: number;
-  mediaType: MediaType;
+  mediaType: "movie" | "tv";
   title: string;
-  year?: string | null;
+  overview: string;
   poster: string | null;
-  rating?: number | null;
+  year?: string;
+  rating?: number;
 };
 
-type Paged = { items: Card[]; nextCursor: string | null };
+export async function GET() {
+  try {
+    const jar = await cookies();
+    const uid = jar.get("nw_uid")?.value ?? null;
+    if (!uid) {
+      return NextResponse.json({ ok: false, message: "Ingen session." }, { status: 401 });
+    }
 
-const SWEDISH_TO_TMDB: Record<string, number> = {
-  Action: 28,
-  Äventyr: 12,
-  Animerat: 16,
-  Komedi: 35,
-  Kriminal: 80,
-  Dokumentär: 99,
-  Drama: 18,
-  Fantasy: 14,
-  "Sci-Fi": 878,
-  Thriller: 53,
-  Skräck: 27,
-  Romantik: 10749,
-};
-
-export async function GET(req: NextRequest) {
-  if (!READ_TOKEN) {
-    return NextResponse.json(
-      { items: [], nextCursor: null, note: "TMDB_READ_TOKEN saknas" },
-      { status: 200 }
-    );
-  }
-
-  const jar = await cookies();
-  const uid = jar.get("nw_uid")?.value ?? null;
-
-  const cursor = new URL(req.url).searchParams.get("cursor");
-  let genres: number[] = [];
-
-  if (uid) {
-    const prof = await prisma.profile.findUnique({
+    const profile = await prisma.profile.findUnique({
       where: { userId: uid },
-      select: { favoriteGenres: true },
+      select: { favoriteGenres: true, region: true },
     });
-    genres = (prof?.favoriteGenres ?? [])
-      .map((g) => SWEDISH_TO_TMDB[g])
-      .filter((n): n is number => Number.isFinite(n));
+
+    const favs = profile?.favoriteGenres ?? [];
+    const region = profile?.region ?? "SE";
+
+    const { movieIds, tvIds } = namesToGenreIds(favs);
+
+    let results: (TmdbMovie | TmdbTv)[] = [];
+    if (movieIds.length || tvIds.length) {
+      const [p1, p2] = await Promise.all([
+        discoverByGenres(region, movieIds, tvIds, 1),
+        discoverByGenres(region, movieIds, tvIds, 2),
+      ]);
+      results = [...p1.movies, ...p1.tv, ...p2.movies, ...p2.tv];
+    } else {
+      results = await trendingFallback();
+    }
+
+    // Normalize -> cards
+    const cards: Card[] = results
+      .map((r) => {
+        if ("title" in r) {
+          const m = r as TmdbMovie;
+          return {
+            id: m.id,
+            mediaType: "movie" as const,
+            title: m.title,
+            overview: m.overview,
+            poster: tmdbPoster(m.poster_path, "w780"),
+            year: m.release_date?.slice(0, 4),
+            rating: m.vote_average,
+          };
+        }
+        const t = r as TmdbTv;
+        return {
+          id: t.id,
+          mediaType: "tv" as const,
+          title: t.name,
+          overview: t.overview,
+          poster: tmdbPoster(t.poster_path, "w780"),
+          year: t.first_air_date?.slice(0, 4),
+          rating: t.vote_average,
+        };
+      })
+      // Remove empties / missing posters to keep UI nice
+      .filter((c) => !!c.title && !!c.poster);
+
+    // Shuffle lite + take 100
+    for (let i = cards.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [cards[i], cards[j]] = [cards[j], cards[i]];
+    }
+
+    return NextResponse.json({ ok: true, items: cards.slice(0, 100) });
+  } catch (e) {
+    console.error("[recs] error:", e);
+    return NextResponse.json({ ok: false, message: "Kunde inte hämta rekommendationer." }, { status: 500 });
   }
-
-  const page = await discover({ genres, cursor });
-  return NextResponse.json(page);
-}
-
-async function discover({
-  genres,
-  cursor,
-}: {
-  genres: number[];
-  cursor: string | null;
-}): Promise<Paged> {
-  const pageNum = cursor ? Number(cursor) : 1;
-
-  const [movie, tv] = await Promise.all([
-    tmdbGet<TmdbPaged<TmdbItem>>("discover/movie", {
-      include_adult: false,
-      with_genres: genres.join(","),
-      sort_by: "popularity.desc",
-      page: pageNum,
-      "vote_count.gte": 50,
-      language: "sv-SE",
-    }),
-    tmdbGet<TmdbPaged<TmdbItem>>("discover/tv", {
-      include_adult: false,
-      with_genres: genres.join(","),
-      sort_by: "popularity.desc",
-      page: pageNum,
-      "vote_count.gte": 50,
-      language: "sv-SE",
-    }),
-  ]);
-
-  const normalize = (r: TmdbItem, type: MediaType): Card => ({
-    id: r.id,
-    mediaType: type,
-    title: r.title ?? r.name ?? "Okänd titel",
-    year: (r.release_date ?? r.first_air_date ?? "").slice(0, 4),
-    poster: r.poster_path ?? null,
-    rating: r.vote_average ?? null,
-  });
-
-  // Interleave
-  const max = Math.max(movie.results.length, tv.results.length);
-  const mixed: Card[] = [];
-  for (let i = 0; i < max; i++) {
-    if (movie.results[i]) mixed.push(normalize(movie.results[i], "movie"));
-    if (tv.results[i]) mixed.push(normalize(tv.results[i], "tv"));
-  }
-
-  const items = mixed.slice(0, 100);
-  const hasMore = pageNum + 1 <= Math.max(movie.total_pages, tv.total_pages);
-  return { items, nextCursor: hasMore ? String(pageNum + 1) : null };
 }

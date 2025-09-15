@@ -1,232 +1,171 @@
 "use client";
 
+import { useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { motion, PanInfo } from "framer-motion";
+import { Heart, X, Info } from "lucide-react";
 
-type MediaType = "movie" | "tv";
-
-type ContentCard = {
-  kind: "content";
+type Card = {
   id: number;
-  mediaType: MediaType;
+  mediaType: "movie" | "tv";
   title: string;
-  year?: string | null;
+  overview: string;
   poster: string | null;
-  rating?: number | null;
+  year?: string;
+  rating?: number;
 };
 
-type AdCard = {
-  kind: "ad";
-  id: number; // negativt id för att skilja mot TMDB
-};
+type ApiRes = { ok: boolean; items?: Card[]; message?: string };
 
-type Card = ContentCard | AdCard;
-
-type Paged = { items: Omit<ContentCard, "kind">[]; nextCursor: string | null };
-
-function insertAds(items: Omit<ContentCard, "kind">[]): Card[] {
-  const out: Card[] = [];
-  let counter = 0;
-  for (const it of items) {
-    out.push({ kind: "content", ...it });
-    counter += 1;
-    if (counter % 10 === 0) out.push({ kind: "ad", id: -counter });
-  }
-  return out;
-}
+const SWIPE_THRESHOLD = 120;
 
 export default function SwipeClient() {
-  const [stack, setStack] = useState<Card[]>([]);
-  const [cursor, setCursor] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [cards, setCards] = useState<Card[]>([]);
+  const [loading, setLoading] = useState(true);
+  const draggingRef = useRef(false);
 
-  const top = stack[0];
-  const nextPeek = stack[1];
-
-  const load = useCallback(async (cur?: string | null) => {
-    setLoading(true);
-    try {
-      const url = new URL("/api/recs/for-you", window.location.origin);
-      if (cur) url.searchParams.set("cursor", cur);
-      const res = await fetch(url.toString(), { cache: "no-store" });
-      if (!res.ok) throw new Error(await res.text());
-      const data = (await res.json()) as Paged;
-      const withAds = insertAds(data.items);
-      setStack((s) => (s.length ? [...s, ...withAds] : withAds));
-      setCursor(data.nextCursor);
-    } catch (e) {
-      console.error("load recs failed:", e);
-    } finally {
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      setLoading(true);
+      const res = await fetch("/api/recs", { cache: "no-store" });
+      const data = (await res.json()) as ApiRes;
+      if (mounted && data.ok && data.items) {
+        setCards(data.items);
+      }
       setLoading(false);
-    }
+    })();
+    return () => {
+      mounted = false;
+    };
   }, []);
 
-  useEffect(() => {
-    // initial load
-    void load(null);
-  }, [load]);
+  const top = cards[0];
+  const next = cards[1];
 
-  useEffect(() => {
-    // auto-preload
-    if (!loading && stack.length < 15 && cursor) void load(cursor);
-  }, [stack.length, cursor, loading, load]);
+  async function like() {
+    if (!top) return;
+    // haptic
+    if (typeof window !== "undefined" && "vibrate" in navigator) navigator.vibrate?.(20);
+    // add to watchlist
+    // fire & forget; we don't block UI
+    void fetch("/api/watchlist/add", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tmdbId: top.id, mediaType: top.mediaType }),
+    });
+    // remove card
+    setCards((c) => c.slice(1));
+  }
 
-  const posterUrl = useCallback((p: string | null) => {
-    return p ? `https://image.tmdb.org/t/p/w780${p}` : "/placeholder-dark.png";
-  }, []);
+  function nope() {
+    if (!top) return;
+    if (typeof window !== "undefined" && "vibrate" in navigator) navigator.vibrate?.(10);
+    setCards((c) => c.slice(1));
+  }
 
-  // Typ-säker vibrate (ingen @ts-expect-error behövs)
-  type NavigatorWithVibrate = Navigator & {
-    vibrate?: (pattern: number | number[]) => boolean;
+  function info() {
+    if (!top) return;
+    // For now: open TMDB page in new tab (simple)
+    const base = top.mediaType === "movie" ? "movie" : "tv";
+    window.open(`https://www.themoviedb.org/${base}/${top.id}`, "_blank", "noopener,noreferrer");
+  }
+
+  const onDragEnd = (_: unknown, info: PanInfo) => {
+    draggingRef.current = false;
+    const x = info.offset.x;
+    if (x > SWIPE_THRESHOLD) like();
+    else if (x < -SWIPE_THRESHOLD) nope();
   };
 
-  const vibrate = useCallback((ms: number) => {
-    if (typeof navigator !== "undefined") {
-      const n = navigator as NavigatorWithVibrate;
-      n.vibrate?.(ms);
-    }
-  }, []);
-
-  const decide = useCallback(
-    async (decision: "like" | "dislike") => {
-      const card = stack[0];
-      if (!card || card.kind === "ad") {
-        // Annons: bara dismiss
-        setStack((s) => s.slice(1));
-        return;
-      }
-
-      try {
-        vibrate(decision === "like" ? 20 : 15);
-        await fetch("/api/swipe/decide", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            tmdbId: card.id,
-            mediaType: card.mediaType,
-            decision,
-          }),
-        });
-      } catch (e) {
-        console.error("decide failed:", e);
-      } finally {
-        setStack((s) => s.slice(1));
-      }
-    },
-    [stack, vibrate]
-  );
-
-  // Tangentbordsgenvägar
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "ArrowLeft") {
-        e.preventDefault();
-        void decide("dislike");
-      } else if (e.key === "ArrowRight") {
-        e.preventDefault();
-        void decide("like");
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [decide]);
-
-  const empty = !top && !loading;
-
-  const InfoRow = useMemo(() => {
-    if (!top || top.kind !== "content") return null;
-    const parts: string[] = [];
-    if (top.year) parts.push(top.year);
-    if (typeof top.rating === "number") parts.push(`★ ${top.rating.toFixed(1)}`);
-    return (
-      <div className="absolute bottom-4 left-4 right-4 text-sm text-white/90">
-        <div className="font-semibold text-lg drop-shadow">{top.title}</div>
-        {parts.length > 0 && <div className="opacity-90">{parts.join(" · ")}</div>}
-      </div>
-    );
-  }, [top]);
+  const actionsDisabled = useMemo(() => !top || loading, [top, loading]);
 
   return (
-    <main className="mx-auto max-w-5xl px-4 py-6">
-      {/* Större kort på desktop */}
-      <div className="relative mx-auto h-[68vh] w-full max-w-xl">
-        {/* Mini-stack peek */}
-        {nextPeek && (
-          <div className="absolute inset-0 -z-10 translate-y-3 scale-[0.99] rounded-2xl bg-neutral-800/40" />
+    <div className="mx-auto max-w-[560px] px-4 pb-24 pt-6">
+      <div className="relative aspect-[2/3] w-full">
+        {/* Mini stack (peek of next) */}
+        {next && (
+          <div className="absolute inset-0 translate-y-3 scale-[0.98] rounded-2xl border border-white/10 bg-black/40" />
         )}
 
-        {/* Kort */}
-        {top && (
-          <div className="relative h-full w-full overflow-hidden rounded-2xl bg-neutral-900 shadow-2xl">
-            {top.kind === "ad" ? (
-              <div className="flex h-full items-center justify-center">
-                <div className="rounded-xl border border-white/10 bg-white/5 px-4 py-3 text-white/90">
-                  Annons
-                </div>
-              </div>
-            ) : (
-              <>
-                {/* Bild via next/image (fixar no-img-element) */}
-                <Image
-                  src={posterUrl(top.poster)}
-                  alt={top.title}
-                  fill
-                  sizes="(max-width: 768px) 100vw, 600px"
-                  className="object-cover"
-                  priority
-                />
-                <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent" />
-                {InfoRow}
-              </>
+        {/* Top card */}
+        {top ? (
+          <motion.div
+            key={`${top.mediaType}-${top.id}`}
+            className="absolute inset-0 overflow-hidden rounded-2xl border border-white/10 bg-neutral-900 shadow-2xl"
+            drag="x"
+            dragElastic={0.2}
+            dragConstraints={{ left: 0, right: 0 }}
+            onDragStart={() => (draggingRef.current = true)}
+            onDragEnd={onDragEnd}
+            whileDrag={{ rotate: top ? (draggingRef.current ? 2 : 0) : 0 }}
+          >
+            {/* Poster */}
+            {top.poster && (
+              <Image
+                src={top.poster}
+                alt={top.title}
+                fill
+                sizes="(max-width: 640px) 100vw, 560px"
+                className="object-cover"
+                priority
+              />
             )}
-          </div>
-        )}
-
-        {/* Tomt-läge */}
-        {empty && (
-          <div className="flex h-full items-center justify-center rounded-2xl border border-white/10">
-            <div className="text-white/80">Slut på förslag nu.</div>
+            {/* Gradient overlay */}
+            <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent" />
+            {/* Front overlay meta */}
+            <div className="absolute inset-x-4 bottom-4">
+              <div className="mb-2 text-sm text-white/80">
+                {top.year ? `${top.year}` : ""}
+                {top.rating ? ` · ★${Math.round(top.rating * 10) / 10}` : ""}
+              </div>
+              <h2 className="text-balance text-2xl font-semibold drop-shadow-md">{top.title}</h2>
+            </div>
+          </motion.div>
+        ) : (
+          <div className="absolute inset-0 rounded-2xl border border-white/10 bg-neutral-900/60 grid place-items-center">
+            <p className="text-white/70">Slut på förslag nu.</p>
           </div>
         )}
       </div>
 
       {/* Action dock */}
-      <div className="mx-auto mt-6 flex w-full max-w-md items-center justify-center gap-6">
+      <div className="mt-6 flex items-center justify-center gap-4">
         <button
           type="button"
           aria-label="Nej"
-          onClick={() => void decide("dislike")}
-          className="grid h-14 w-14 place-items-center rounded-full bg-red-600 text-white shadow-lg transition active:scale-95"
-          title="Nej (←)"
+          onClick={nope}
+          disabled={actionsDisabled}
+          className="group inline-flex size-16 items-center justify-center rounded-full border border-white/10 bg-red-500/10 backdrop-blur transition hover:bg-red-500/20 disabled:opacity-40"
         >
-          ×
+          <X className="size-7 text-red-400 group-hover:scale-110 transition-transform" />
         </button>
 
         <button
           type="button"
           aria-label="Info"
-          onClick={() => {
-            const card = stack[0];
-            if (!card || card.kind !== "content") return;
-            const base = card.mediaType === "movie" ? "movie" : "tv";
-            window.open(`https://www.themoviedb.org/${base}/${card.id}`, "_blank");
-          }}
-          className="grid h-12 w-12 place-items-center rounded-full bg-sky-600 text-white shadow-lg transition active:scale-95"
-          title="Info"
+          onClick={info}
+          disabled={actionsDisabled}
+          className="group inline-flex size-16 items-center justify-center rounded-full border border-white/10 bg-blue-500/10 backdrop-blur transition hover:bg-blue-500/20 disabled:opacity-40"
         >
-          i
+          <Info className="size-7 text-blue-400 group-hover:scale-110 transition-transform" />
         </button>
 
         <button
           type="button"
           aria-label="Gilla"
-          onClick={() => void decide("like")}
-          className="grid h-14 w-14 place-items-center rounded-full bg-emerald-600 text-white shadow-lg transition active:scale-95"
-          title="Gilla (→)"
+          onClick={like}
+          disabled={actionsDisabled}
+          className="group inline-flex size-16 items-center justify-center rounded-full border border-white/10 bg-green-500/10 backdrop-blur transition hover:bg-green-500/20 disabled:opacity-40"
         >
-          ❤
+          <Heart className="size-7 text-green-400 group-hover:scale-110 transition-transform" />
         </button>
       </div>
-    </main>
+
+      {/* Loading state */}
+      {loading && (
+        <div className="mt-4 text-center text-sm text-white/50">Laddar rekommendationer…</div>
+      )}
+    </div>
   );
 }
