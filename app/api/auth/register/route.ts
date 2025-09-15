@@ -31,7 +31,6 @@ export async function POST(req: NextRequest) {
       return fail(400, "E-post och lösenord krävs.");
     }
 
-    // Finns user?
     const user = await prisma.user.findUnique({
       where: { id: uid },
       select: { id: true },
@@ -40,38 +39,31 @@ export async function POST(req: NextRequest) {
       return fail(401, "Ogiltig session. Användare saknas.", { uid });
     }
 
-    // Är e-post upptagen av någon annan?
     const taken = await prisma.user.findFirst({
       where: { email, NOT: { id: uid } },
       select: { id: true },
     });
-    if (taken) {
-      return fail(409, "E-postadressen används redan.");
-    }
+    if (taken) return fail(409, "E-postadressen används redan.");
 
     const hash = await bcrypt.hash(password, 12);
-
-    // Skapa verify-token
     const token = crypto.randomBytes(32).toString("hex");
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
-    // Transaktion: uppdatera user + skapa verification
     await prisma.$transaction([
       prisma.user.update({
         where: { id: uid },
         data: {
           email,
-          passwordHash: hash, // Prisma-fält (DB: password_hash)
-          // emailVerified: null // låt den vara null tills verifierad
+          passwordHash: hash, // DB: password_hash
         },
       }),
       prisma.verification.create({
         data: {
           token,
-          userId: uid,  // Prisma-fält (DB: user_id)
+          userId: uid, // DB: user_id
           email,
           name: null,
-          expiresAt,    // Prisma-fält (DB: expires_at)
+          expiresAt, // DB: expires_at
         },
       }),
     ]);
@@ -79,12 +71,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       ok: true,
       message: "Konto uppdaterat. Verifieringslänk skapad.",
-      // devToken: token, // avkommentera vid behov under utveckling
+      // devToken: token, // avkommentera för utveckling
     });
   } catch (err) {
-    // Prisma fel – ge tydligt svar
     if (err instanceof Prisma.PrismaClientKnownRequestError) {
-      // https://www.prisma.io/docs/orm/reference/error-reference
       switch (err.code) {
         case "P2002":
           return fail(409, "E-postadressen används redan (unik constraint).", {
@@ -99,7 +89,7 @@ export async function POST(req: NextRequest) {
         case "P2021":
           return fail(
             500,
-            "Databasobjekt saknas (t.ex. tabell eller vy). Kontrollera att modellen 'verification' är migrerad till din DB.",
+            "Saknar databasobjekt (t.ex. tabell). Kontrollera modellen 'verification' och migrering.",
             { code: err.code, meta: err.meta }
           );
         case "P2025":

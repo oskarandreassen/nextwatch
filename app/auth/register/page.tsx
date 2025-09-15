@@ -1,3 +1,4 @@
+// app/auth/register/page.tsx
 "use client";
 
 import { useState } from "react";
@@ -22,13 +23,12 @@ export default function RegisterPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password }),
       });
-      const data = await res.json();
+      const data: { ok?: boolean; message?: string } = await res.json();
       if (!res.ok || !data?.ok) {
         throw new Error(data?.message || "Ett fel uppstod.");
       }
       setOk("Klart! Kolla din e-post för verifikation.");
-      // vidare till appen – ändra till /auth/verify om du bygger verify-sida
-      setTimeout(() => router.replace("/swipe"), 600);
+      setTimeout(() => router.replace("/swipe"), 700);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Ett fel uppstod.");
     } finally {
