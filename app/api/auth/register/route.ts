@@ -1,504 +1,116 @@
-// app/onboarding/page_client.tsx
-"use client";
+// app/api/auth/register/route.ts
+import { NextRequest, NextResponse } from "next/server";
+import { cookies } from "next/headers";
+import prisma from "../../../../lib/prisma";
+import { Prisma } from "@prisma/client";
+import bcrypt from "bcryptjs";
+import crypto from "crypto";
 
-import { useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
-import Image from "next/image";
-import Link from "next/link";
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
-// --- Providers: basnamn → vi försöker .svg först, faller tillbaka till .svg.svg ---
-const PROVIDER_BASENAME: Record<string, string> = {
-  netflix: "netflix",
-  "disney+": "disney-plus",
-  disney: "disney-plus",
-  "prime video": "prime-video",
-  prime: "prime-video",
-  max: "max",
-  viaplay: "viaplay",
-  "apple tv+": "apple-tv-plus",
-  appletv: "apple-tv-plus",
-  skyshowtime: "skyshowtime",
-  "svt play": "svt-play",
-  svt: "svt-play",
-  "tv4 play": "tv4-play",
-  tv4: "tv4-play",
-};
-function keyify(label: string) {
-  return label.toLowerCase().replace(/\s+/g, " ").trim();
+function j(status: number, message: string, extra?: Record<string, unknown>) {
+  const body: Record<string, unknown> = { ok: false, message };
+  if (extra) body.extra = extra;
+  return NextResponse.json(body, { status });
 }
 
-function ProviderChip({
-  label,
-  selected,
-  onToggle,
-}: {
-  label: string;
-  selected: boolean;
-  onToggle: () => void;
-}) {
-  const key = keyify(label);
-  const base = PROVIDER_BASENAME[key];
-  const [src, setSrc] = useState<string | null>(
-    base ? `/providers/${base}.svg` : null
-  );
+export async function POST(req: NextRequest) {
+  try {
+    const jar = await cookies();
+    const uid = jar.get("nw_uid")?.value ?? null;
+    if (!uid) return j(401, "Ingen session. Logga in igen.");
 
-  return (
-    <button
-      type="button"
-      onClick={onToggle}
-      className={[
-        "inline-flex items-center gap-2 rounded-xl border px-3 py-2 text-sm transition",
-        selected
-          ? "border-cyan-400 bg-cyan-400/10"
-          : "border-white/10 bg-white/5 hover:bg-white/10",
-      ].join(" ")}
-    >
-      {src ? (
-        <span className="relative inline-block h-5 w-5">
-          <Image
-            src={src}
-            alt={label}
-            fill
-            sizes="20px"
-            onError={() => {
-              if (base) setSrc(`/providers/${base}.svg.svg`);
-            }}
-          />
-        </span>
-      ) : (
-        <span className="grid h-5 w-5 place-items-center rounded bg-white/20 text-[10px] font-bold">
-          {label.slice(0, 1).toUpperCase()}
-        </span>
-      )}
-      <span>{label}</span>
-    </button>
-  );
-}
+    const body = (await req.json()) as { email?: string; password?: string };
+    const email = (body.email || "").trim().toLowerCase();
+    const password = (body.password || "").trim();
+    if (!email || !password) return j(400, "E-post och lösenord krävs.");
 
-// ---------- typer ----------
-type Fav = { id: number; title: string; year?: string; poster?: string | null };
+    // --- Preflight: kontrollera att kolumnerna finns i rätt DB ---
+    const [usersCols, verCols] = await Promise.all([
+      prisma.$queryRaw<Array<{ column_name: string }>>`
+        SELECT column_name FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'users'
+      `,
+      prisma.$queryRaw<Array<{ column_name: string }>>`
+        SELECT column_name FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'verifications'
+      `,
+    ]);
 
-function SearchBox({
-  label,
-  placeholder,
-  type, // "movie" | "tv"
-  value,
-  onSelect,
-  locale = "sv-SE",
-}: {
-  label: string;
-  placeholder: string;
-  type: "movie" | "tv";
-  value: Fav | null;
-  onSelect: (v: Fav | null) => void;
-  locale?: string;
-}) {
-  const [q, setQ] = useState("");
-  const [open, setOpen] = useState(false);
-  const [items, setItems] = useState<Fav[]>([]);
-  const boxRef = useRef<HTMLDivElement>(null);
+    const userCols = new Set(usersCols.map((r) => r.column_name));
+    const verColsSet = new Set(verCols.map((r) => r.column_name));
 
-  useEffect(() => {
-    const onDoc = (e: MouseEvent) => {
-      if (!boxRef.current) return;
-      if (!boxRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
-  }, []);
-
-  useEffect(() => {
-    let active = true;
-    const run = async () => {
-      const query = q.trim();
-      if (value || query.length < 2) {
-        setItems([]);
-        return;
-      }
-      try {
-        const url = `/api/tmdb/search?type=${type}&q=${encodeURIComponent(
-          query
-        )}&locale=${encodeURIComponent(locale)}`;
-        const res = await fetch(url, { cache: "no-store" });
-        if (!res.ok) return;
-        const data: { ok?: boolean; results?: Fav[] } = await res.json();
-        if (!active || !data?.ok) return;
-        setItems(data.results ?? []);
-        setOpen(true);
-      } catch {
-        // tyst
-      }
-    };
-    const t = setTimeout(run, 180);
-    return () => {
-      active = false;
-      clearTimeout(t);
-    };
-  }, [q, type, locale, value]);
-
-  return (
-    <div className="relative" ref={boxRef}>
-      <label className="mb-1 block text-sm text-white/70">{label}</label>
-      <div className="flex gap-2">
-        <input
-          className="mt-0 w-full rounded-xl border border-white/10 bg-black/40 p-3 outline-none focus:ring-2 focus:ring-white/20"
-          placeholder={placeholder}
-          value={value ? value.title : q}
-          onChange={(e) => {
-            onSelect(null);
-            setQ(e.target.value);
-          }}
-          onFocus={() => {
-            if (items.length > 0) setOpen(true);
-          }}
-        />
-        {value && (
-          <button
-            type="button"
-            onClick={() => onSelect(null)}
-            className="rounded-xl border border-white/10 px-3 hover:bg-white/10"
-            title="Rensa"
-          >
-            ✕
-          </button>
-        )}
-      </div>
-
-      {open && items.length > 0 && (
-        <div className="absolute z-30 mt-2 w-full overflow-hidden rounded-xl border border-white/10 bg-black/70 backdrop-blur">
-          {items.map((it) => (
-            <button
-              key={`${type}-${it.id}`}
-              type="button"
-              onClick={() => {
-                onSelect(it);
-                setQ("");
-                setOpen(false);
-              }}
-              className="flex w-full items-center gap-3 p-2 text-left hover:bg-white/10"
-            >
-              <div className="relative h-10 w-7 shrink-0 overflow-hidden rounded">
-                {/* Next Image används för att undvika eslint-varning; unoptimized = ingen extra konfiguration */}
-                <Image
-                  src={
-                    it.poster ??
-                    "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='40'/%3E"
-                  }
-                  alt={it.title}
-                  width={28}
-                  height={40}
-                  className="h-full w-full object-cover"
-                  unoptimized
-                />
-              </div>
-              <div className="min-w-0">
-                <div className="truncate text-sm">
-                  {it.title} {it.year ? `(${it.year})` : ""}
-                </div>
-              </div>
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ---------- constants ----------
-const LANGS = ["sv", "en"] as const;
-const LOCALES = ["sv-SE", "en-US"] as const;
-const REGIONS = ["SE", "NO", "DK", "FI"] as const;
-
-const PROVIDERS = [
-  "Netflix",
-  "Disney+",
-  "Prime Video",
-  "Max",
-  "Viaplay",
-  "Apple TV+",
-  "SkyShowtime",
-  "SVT Play",
-  "TV4 Play",
-] as const;
-
-const GENRES = [
-  "Action",
-  "Äventyr",
-  "Animerat",
-  "Komedi",
-  "Kriminal",
-  "Drama",
-  "Fantasy",
-  "Skräck",
-  "Romantik",
-  "Sci-Fi",
-  "Thriller",
-  "Dokumentär",
-] as const;
-
-export default function OnboardingPage() {
-  const router = useRouter();
-
-  // state
-  const [displayName, setDisplayName] = useState("");
-  const [dob, setDob] = useState("");
-  const [language, setLanguage] = useState<(typeof LANGS)[number]>("sv");
-  const [region, setRegion] = useState<(typeof REGIONS)[number]>("SE");
-  const [locale, setLocale] = useState<(typeof LOCALES)[number]>("sv-SE");
-  const [providers, setProviders] = useState<string[]>([]);
-  const [favoriteMovie, setFavoriteMovie] = useState<Fav | null>(null);
-  const [favoriteShow, setFavoriteShow] = useState<Fav | null>(null);
-  const [likeGenres, setLikeGenres] = useState<string[]>([]);
-  const [dislikeGenres, setDislikeGenres] = useState<string[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  function toggleProvider(p: string) {
-    setProviders((prev) =>
-      prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p]
+    const missingUsers = ["password_hash", "email_verified", "last_login_at"].filter(
+      (c) => !userCols.has(c)
     );
-  }
-  function toggleLike(g: string) {
-    setLikeGenres((prev) =>
-      prev.includes(g) ? prev.filter((x) => x !== g) : [...prev, g]
-    );
-    setDislikeGenres((prev) => prev.filter((x) => x !== g));
-  }
-  function toggleDislike(g: string) {
-    setDislikeGenres((prev) =>
-      prev.includes(g) ? prev.filter((x) => x !== g) : [...prev, g]
-    );
-    setLikeGenres((prev) => prev.filter((x) => x !== g));
-  }
+    const missingVerifications = [
+      "token",
+      "user_id",
+      "email",
+      "name",
+      "created_at",
+      "expires_at",
+    ].filter((c) => !verColsSet.has(c));
 
-  async function onSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setErr(null);
-    setLoading(true);
-
-    const payload = {
-      displayName,
-      dob,
-      region,
-      locale,
-      uiLanguage: language,
-      providers,
-      favoriteMovie,
-      favoriteShow,
-      favoriteGenres: likeGenres,
-      dislikedGenres: dislikeGenres,
-      language,
-    };
-
-    try {
-      const res = await fetch("/api/profile/save-onboarding", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+    if (missingUsers.length || missingVerifications.length) {
+      return j(500, "DB-schema mismatch (saknade kolumner).", {
+        missingUsers,
+        missingVerifications,
+        hint:
+          "Kör SQL-editorn mot samma databas som Vercel använder (kolla Project → Settings → Environment Variables → DATABASE_URL).",
       });
-      const data: { ok?: boolean; message?: string } = await res.json();
-      if (!res.ok || !data?.ok) {
-        throw new Error(data?.message || "Ett fel uppstod.");
-      }
-      router.replace("/auth/register");
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : "Ett fel uppstod.");
-    } finally {
-      setLoading(false);
     }
+    // --------------------------------------------------------------
+
+    // Finns användaren?
+    const user = await prisma.user.findUnique({
+      where: { id: uid },
+      select: { id: true },
+    });
+    if (!user) return j(401, "Ogiltig session. Användare saknas.", { uid });
+
+    // E-post upptagen av någon annan?
+    const taken = await prisma.user.findFirst({
+      where: { email, NOT: { id: uid } },
+      select: { id: true },
+    });
+    if (taken) return j(409, "E-postadressen används redan.");
+
+    // Hasha och skapa verifikation
+    const hash = await bcrypt.hash(password, 12);
+    const token = crypto.randomBytes(32).toString("hex");
+    const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+    await prisma.$transaction([
+      prisma.user.update({
+        where: { id: uid },
+        data: {
+          email,
+          passwordHash: hash, // @map("password_hash")
+        },
+      }),
+      prisma.verification.create({
+        data: {
+          token,
+          userId: uid, // @map("user_id")
+          email,
+          name: null,
+          expiresAt, // @map("expires_at")
+        },
+      }),
+    ]);
+
+    return NextResponse.json({
+      ok: true,
+      message: "Konto uppdaterat. Verifieringslänk skapad.",
+    });
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError) {
+      return j(500, `Databasfel (${err.code}).`, { code: err.code, meta: err.meta });
+    }
+    console.error("[auth/register] error:", err);
+    const msg = err instanceof Error ? err.message : "Internt fel.";
+    return j(500, msg);
   }
-
-  return (
-    <div className="mx-auto max-w-4xl p-6">
-      <h1 className="mb-6 text-3xl font-semibold">Onboarding</h1>
-
-      <div className="rounded-2xl border border-white/10 bg-white/5 p-6 shadow-xl">
-        {err && (
-          <div className="mb-4 rounded-lg bg-red-500/10 px-3 py-2 text-sm text-red-400">
-            {err}
-          </div>
-        )}
-
-        <form onSubmit={onSubmit} className="space-y-6">
-          {/* Rad 1 */}
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            <div>
-              <label className="mb-1 block text-sm text-white/70">
-                Visningsnamn
-              </label>
-              <input
-                className="w-full rounded-xl border border-white/10 bg-black/40 p-3 outline-none focus:ring-2 focus:ring-white/20"
-                placeholder="Ditt namn…"
-                value={displayName}
-                onChange={(e) => setDisplayName(e.target.value)}
-                required
-              />
-            </div>
-            <div>
-              <label className="mb-1 block text-sm text-white/70">
-                Födelsedatum
-              </label>
-              <input
-                type="date"
-                className="w-full rounded-xl border border-white/10 bg-black/40 p-3 outline-none focus:ring-2 focus:ring-white/20"
-                value={dob}
-                onChange={(e) => setDob(e.target.value)}
-                required
-              />
-            </div>
-          </div>
-
-          {/* Rad 2 */}
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-            <div>
-              <label className="mb-1 block text-sm text-white/70">Språk</label>
-              <select
-                className="w-full rounded-xl border border-white/10 bg-black/40 p-3 outline-none focus:ring-2 focus:ring-white/20"
-                value={language}
-                onChange={(e) =>
-                  setLanguage(e.target.value as (typeof LANGS)[number])
-                }
-              >
-                {LANGS.map((l) => (
-                  <option key={l} value={l}>
-                    {l}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="mb-1 block text-sm text-white/70">Region</label>
-              <select
-                className="w-full rounded-xl border border-white/10 bg-black/40 p-3 outline-none focus:ring-2 focus:ring-white/20"
-                value={region}
-                onChange={(e) =>
-                  setRegion(e.target.value as (typeof REGIONS)[number])
-                }
-                required
-              >
-                {REGIONS.map((r) => (
-                  <option key={r} value={r}>
-                    {r}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="mb-1 block text-sm text-white/70">Locale</label>
-              <select
-                className="w-full rounded-xl border border-white/10 bg-black/40 p-3 outline-none focus:ring-2 focus:ring-white/20"
-                value={locale}
-                onChange={(e) =>
-                  setLocale(e.target.value as (typeof LOCALES)[number])
-                }
-                required
-              >
-                {LOCALES.map((l) => (
-                  <option key={l} value={l}>
-                    {l}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-
-          {/* Rad 3: favoritfilm/serie */}
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            <SearchBox
-              label="Favoritfilm"
-              placeholder="Sök titel…"
-              type="movie"
-              value={favoriteMovie}
-              onSelect={setFavoriteMovie}
-              locale={locale}
-            />
-            <SearchBox
-              label="Favoritserie"
-              placeholder="Sök titel…"
-              type="tv"
-              value={favoriteShow}
-              onSelect={setFavoriteShow}
-              locale={locale}
-            />
-          </div>
-
-          {/* Providers */}
-          <div>
-            <div className="mb-2 text-sm text-white/70">Streaming­tjänster</div>
-            <div className="flex flex-wrap gap-3">
-              {PROVIDERS.map((p) => (
-                <ProviderChip
-                  key={p}
-                  label={p}
-                  selected={providers.includes(p)}
-                  onToggle={() => toggleProvider(p)}
-                />
-              ))}
-            </div>
-          </div>
-
-          {/* Genres */}
-          <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
-            <div>
-              <div className="mb-2 text-sm text-white/70">Gillar</div>
-              <div className="flex flex-wrap gap-2">
-                {GENRES.map((g) => (
-                  <button
-                    key={`like-${g}`}
-                    type="button"
-                    onClick={() => toggleLike(g)}
-                    className={[
-                      "rounded-full px-3 py-1 text-sm border transition",
-                      likeGenres.includes(g)
-                        ? "border-emerald-400 bg-emerald-400/10"
-                        : "border-white/10 bg-white/5 hover:bg-white/10",
-                    ].join(" ")}
-                  >
-                    {g}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div>
-              <div className="mb-2 text-sm text-white/70">Ogillar</div>
-              <div className="flex flex-wrap gap-2">
-                {GENRES.map((g) => (
-                  <button
-                    key={`dislike-${g}`}
-                    type="button"
-                    onClick={() => toggleDislike(g)}
-                    className={[
-                      "rounded-full px-3 py-1 text-sm border transition",
-                      dislikeGenres.includes(g)
-                        ? "border-rose-400 bg-rose-400/10"
-                        : "border-white/10 bg-white/5 hover:bg-white/10",
-                    ].join(" ")}
-                  >
-                    {g}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-
-          {/* Knappar */}
-          <div className="flex items-center justify-between">
-            <Link
-              href="/"
-              className="rounded-xl border border-white/10 px-4 py-2 hover:bg-white/10"
-            >
-              Tillbaka
-            </Link>
-            <button
-              type="submit"
-              disabled={loading}
-              className="rounded-xl bg-white/15 px-4 py-2 font-medium hover:bg-white/25 disabled:opacity-50"
-            >
-              {loading ? "Sparar…" : "Spara & börja"}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
 }
