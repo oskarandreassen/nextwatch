@@ -6,24 +6,23 @@ import { useRouter } from "next/navigation";
 import Image from "next/image";
 import Link from "next/link";
 
-// ---------- ProviderChip (med loggor + snygg fallback) ----------
-const PROVIDER_LOGOS: Record<string, string> = {
-  netflix: "/providers/netflix.svg",
-  "disney+": "/providers/disney-plus.svg",
-  disney: "/providers/disney-plus.svg",
-  "prime video": "/providers/prime-video.svg",
-  prime: "/providers/prime-video.svg",
-  max: "/providers/max.svg",
-  viaplay: "/providers/viaplay.svg",
-  "apple tv+": "/providers/apple-tv-plus.svg",
-  appletv: "/providers/apple-tv-plus.svg",
-  skyshowtime: "/providers/skyshowtime.svg",
-  "svt play": "/providers/svt-play.svg",
-  svt: "/providers/svt-play.svg",
-  "tv4 play": "/providers/tv4-play.svg",
-  tv4: "/providers/tv4-play.svg",
+// --- Providers: basnamn → vi försöker .svg först, faller tillbaka till .svg.svg ---
+const PROVIDER_BASENAME: Record<string, string> = {
+  netflix: "netflix",
+  "disney+": "disney-plus",
+  disney: "disney-plus",
+  "prime video": "prime-video",
+  prime: "prime-video",
+  max: "max",
+  viaplay: "viaplay",
+  "apple tv+": "apple-tv-plus",
+  appletv: "apple-tv-plus",
+  skyshowtime: "skyshowtime",
+  "svt play": "svt-play",
+  svt: "svt-play",
+  "tv4 play": "tv4-play",
+  tv4: "tv4-play",
 };
-
 function keyify(label: string) {
   return label.toLowerCase().replace(/\s+/g, " ").trim();
 }
@@ -38,7 +37,11 @@ function ProviderChip({
   onToggle: () => void;
 }) {
   const key = keyify(label);
-  const src = PROVIDER_LOGOS[key];
+  const base = PROVIDER_BASENAME[key];
+  const [src, setSrc] = useState<string | null>(
+    base ? `/providers/${base}.svg` : null
+  );
+
   return (
     <button
       type="button"
@@ -52,7 +55,16 @@ function ProviderChip({
     >
       {src ? (
         <span className="relative inline-block h-5 w-5">
-          <Image src={src} alt={label} fill sizes="20px" />
+          <Image
+            src={src}
+            alt={label}
+            fill
+            sizes="20px"
+            onError={() => {
+              // Fallback om du råkat döpa filerna till .svg.svg
+              if (base) setSrc(`/providers/${base}.svg.svg`);
+            }}
+          />
         </span>
       ) : (
         <span className="grid h-5 w-5 place-items-center rounded bg-white/20 text-[10px] font-bold">
@@ -64,25 +76,9 @@ function ProviderChip({
   );
 }
 
-// ---------- TMDb-resultattyper (undviker `any`) ----------
-type TMDBMovie = {
-  id: number;
-  title?: string;
-  original_title?: string;
-  release_date?: string;
-  poster_path?: string | null;
-};
-type TMDBTv = {
-  id: number;
-  name?: string;
-  original_name?: string;
-  first_air_date?: string;
-  poster_path?: string | null;
-};
-
+// ---------- typer ----------
 type Fav = { id: number; title: string; year?: string; poster?: string | null };
 
-// ---------- Sökbox för TMDb (movie/tv) ----------
 function SearchBox({
   label,
   placeholder,
@@ -116,61 +112,30 @@ function SearchBox({
     let active = true;
     const run = async () => {
       const query = q.trim();
-      if (query.length < 2) {
+      if (value || query.length < 2) {
         setItems([]);
         return;
       }
       try {
-        const key = process.env.NEXT_PUBLIC_TMDB_API_KEY;
-        if (!key) return;
-
-        const endpoint =
-          type === "movie"
-            ? "https://api.themoviedb.org/3/search/movie"
-            : "https://api.themoviedb.org/3/search/tv";
-
-        const url = `${endpoint}?api_key=${key}&query=${encodeURIComponent(
+        const url = `/api/tmdb/search?type=${type}&q=${encodeURIComponent(
           query
-        )}&language=${encodeURIComponent(locale)}&include_adult=false&page=1`;
-
-        const res = await fetch(url);
+        )}&locale=${encodeURIComponent(locale)}`;
+        const res = await fetch(url, { cache: "no-store" });
         if (!res.ok) return;
-        const data: { results?: unknown } = await res.json();
-        if (!active) return;
-
-        const arr = Array.isArray(data.results) ? data.results : [];
-        const out: Fav[] = arr.slice(0, 8).map((r) => {
-          if (type === "movie") {
-            const m = r as TMDBMovie;
-            const title = m.title ?? m.original_title ?? "Okänd titel";
-            const year = (m.release_date ?? "").toString().slice(0, 4);
-            const poster = m.poster_path
-              ? `https://image.tmdb.org/t/p/w154${m.poster_path}`
-              : null;
-            return { id: m.id, title, year, poster };
-          } else {
-            const tv = r as TMDBTv;
-            const title = tv.name ?? tv.original_name ?? "Okänd titel";
-            const year = (tv.first_air_date ?? "").toString().slice(0, 4);
-            const poster = tv.poster_path
-              ? `https://image.tmdb.org/t/p/w154${tv.poster_path}`
-              : null;
-            return { id: tv.id, title, year, poster };
-          }
-        });
-
-        setItems(out);
+        const data: { ok?: boolean; results?: Fav[] } = await res.json();
+        if (!active || !data?.ok) return;
+        setItems(data.results ?? []);
         setOpen(true);
       } catch {
-        // tyst fel
+        // tyst
       }
     };
-    const t = setTimeout(run, 200);
+    const t = setTimeout(run, 180);
     return () => {
       active = false;
       clearTimeout(t);
     };
-  }, [q, type, locale]);
+  }, [q, type, locale, value]);
 
   return (
     <div className="relative" ref={boxRef}>
@@ -214,8 +179,8 @@ function SearchBox({
               className="flex w-full items-center gap-3 p-2 text-left hover:bg-white/10"
             >
               <div className="relative h-10 w-7 shrink-0 overflow-hidden rounded">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
                 {it.poster ? (
-                  // eslint-disable-next-line @next/next/no-img-element
                   <img
                     src={it.poster}
                     alt={it.title}
@@ -240,7 +205,7 @@ function SearchBox({
   );
 }
 
-// ---------- Själva Onboarding-sidan ----------
+// ---------- constants ----------
 const LANGS = ["sv", "en"];
 const LOCALES = ["sv-SE", "en-US"];
 const REGIONS = ["SE", "NO", "DK", "FI"];
@@ -275,24 +240,17 @@ const GENRES = [
 export default function OnboardingPage() {
   const router = useRouter();
 
-  // Basfält
+  // state
   const [displayName, setDisplayName] = useState("");
-  const [dob, setDob] = useState(""); // YYYY-MM-DD
+  const [dob, setDob] = useState("");
   const [language, setLanguage] = useState("sv");
   const [region, setRegion] = useState("SE");
   const [locale, setLocale] = useState("sv-SE");
-
-  // Providers
   const [providers, setProviders] = useState<string[]>([]);
-
-  // Favoriter
   const [favoriteMovie, setFavoriteMovie] = useState<Fav | null>(null);
   const [favoriteShow, setFavoriteShow] = useState<Fav | null>(null);
-
-  // Genres
   const [likeGenres, setLikeGenres] = useState<string[]>([]);
   const [dislikeGenres, setDislikeGenres] = useState<string[]>([]);
-
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -324,13 +282,13 @@ export default function OnboardingPage() {
       dob,
       region,
       locale,
-      uiLanguage: language, // skickar UI-språk = valt språk
+      uiLanguage: language,
       providers,
       favoriteMovie,
       favoriteShow,
       favoriteGenres: likeGenres,
       dislikedGenres: dislikeGenres,
-      language, // valfritt fält
+      language,
     };
 
     try {
@@ -343,7 +301,7 @@ export default function OnboardingPage() {
       if (!res.ok || !data?.ok) {
         throw new Error(data?.message || "Ett fel uppstod.");
       }
-      // ✅ Vid lyckad sparning – gå till e-post/lösen
+      // vidare till skapa login
       router.replace("/auth/register");
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Ett fel uppstod.");
@@ -364,7 +322,7 @@ export default function OnboardingPage() {
         )}
 
         <form onSubmit={onSubmit} className="space-y-6">
-          {/* Rad 1: DisplayName + DOB */}
+          {/* Rad 1 */}
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <div>
               <label className="mb-1 block text-sm text-white/70">
@@ -378,7 +336,6 @@ export default function OnboardingPage() {
                 required
               />
             </div>
-
             <div>
               <label className="mb-1 block text-sm text-white/70">
                 Födelsedatum
@@ -393,7 +350,7 @@ export default function OnboardingPage() {
             </div>
           </div>
 
-          {/* Rad 2: språk/region/locale */}
+          {/* Rad 2 */}
           <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
             <div>
               <label className="mb-1 block text-sm text-white/70">Språk</label>
@@ -402,14 +359,13 @@ export default function OnboardingPage() {
                 value={language}
                 onChange={(e) => setLanguage(e.target.value)}
               >
-                {LANGS.map((l) => (
+                {["sv", "en"].map((l) => (
                   <option key={l} value={l}>
                     {l}
                   </option>
                 ))}
               </select>
             </div>
-
             <div>
               <label className="mb-1 block text-sm text-white/70">Region</label>
               <select
@@ -418,14 +374,13 @@ export default function OnboardingPage() {
                 onChange={(e) => setRegion(e.target.value)}
                 required
               >
-                {REGIONS.map((r) => (
+                {["SE", "NO", "DK", "FI"].map((r) => (
                   <option key={r} value={r}>
                     {r}
                   </option>
                 ))}
               </select>
             </div>
-
             <div>
               <label className="mb-1 block text-sm text-white/70">Locale</label>
               <select
@@ -434,7 +389,7 @@ export default function OnboardingPage() {
                 onChange={(e) => setLocale(e.target.value)}
                 required
               >
-                {LOCALES.map((l) => (
+                {["sv-SE", "en-US"].map((l) => (
                   <option key={l} value={l}>
                     {l}
                   </option>
@@ -443,7 +398,7 @@ export default function OnboardingPage() {
             </div>
           </div>
 
-          {/* Rad 3: favoritfilm/serie (inline-sök) */}
+          {/* Rad 3: favoritfilm/serie */}
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <SearchBox
               label="Favoritfilm"
@@ -463,7 +418,7 @@ export default function OnboardingPage() {
             />
           </div>
 
-          {/* Rad 4: Providers */}
+          {/* Providers */}
           <div>
             <div className="mb-2 text-sm text-white/70">Streaming­tjänster</div>
             <div className="flex flex-wrap gap-3">
@@ -478,7 +433,7 @@ export default function OnboardingPage() {
             </div>
           </div>
 
-          {/* Rad 5: Genres (gillar / ogillar) */}
+          {/* Genres */}
           <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
             <div>
               <div className="mb-2 text-sm text-white/70">Gillar</div>
