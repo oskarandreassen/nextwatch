@@ -9,15 +9,18 @@ import crypto from "crypto";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+function fail(status: number, message: string, extra?: Record<string, unknown>) {
+  const body: Record<string, unknown> = { ok: false, message };
+  if (extra) body.debug = extra;
+  return NextResponse.json(body, { status });
+}
+
 export async function POST(req: NextRequest) {
   try {
     const jar = await cookies();
     const uid = jar.get("nw_uid")?.value ?? null;
     if (!uid) {
-      return NextResponse.json(
-        { ok: false, message: "Ingen session. Logga in igen." },
-        { status: 401 }
-      );
+      return fail(401, "Ingen session. Logga in igen.");
     }
 
     const body = (await req.json()) as { email?: string; password?: string };
@@ -25,77 +28,92 @@ export async function POST(req: NextRequest) {
     const password = (body.password || "").trim();
 
     if (!email || !password) {
-      return NextResponse.json(
-        { ok: false, message: "E-post och lösenord krävs." },
-        { status: 400 }
-      );
+      return fail(400, "E-post och lösenord krävs.");
     }
 
-    // Säkerställ att user finns
+    // Finns user?
     const user = await prisma.user.findUnique({
       where: { id: uid },
       select: { id: true },
     });
     if (!user) {
-      return NextResponse.json(
-        { ok: false, message: "Ogiltig session. Användare saknas." },
-        { status: 401 }
-      );
+      return fail(401, "Ogiltig session. Användare saknas.", { uid });
     }
 
-    // E-post upptagen av någon annan?
+    // Är e-post upptagen av någon annan?
     const taken = await prisma.user.findFirst({
       where: { email, NOT: { id: uid } },
       select: { id: true },
     });
     if (taken) {
-      return NextResponse.json(
-        { ok: false, message: "E-postadressen används redan." },
-        { status: 409 }
-      );
+      return fail(409, "E-postadressen används redan.");
     }
 
-    // Hasha lösen
     const hash = await bcrypt.hash(password, 12);
 
-    // Uppdatera användarens login-fält
-    await prisma.user.update({
-      where: { id: uid },
-      data: {
-        email,
-        passwordHash: hash, // ✅ camelCase (DB: password_hash)
-        // emailVerified lämnas null tills verifikation
-      },
-    });
-
-    // Skapa verifieringstoken (24h)
+    // Skapa verify-token
     const token = crypto.randomBytes(32).toString("hex");
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
-    await prisma.verification.create({
-      data: {
-        token,
-        userId: uid,     // ✅ camelCase (DB: user_id)
-        email,
-        name: null,
-        expiresAt,       // ✅ camelCase (DB: expires_at)
-      },
-    });
+    // Transaktion: uppdatera user + skapa verification
+    await prisma.$transaction([
+      prisma.user.update({
+        where: { id: uid },
+        data: {
+          email,
+          passwordHash: hash, // Prisma-fält (DB: password_hash)
+          // emailVerified: null // låt den vara null tills verifierad
+        },
+      }),
+      prisma.verification.create({
+        data: {
+          token,
+          userId: uid,  // Prisma-fält (DB: user_id)
+          email,
+          name: null,
+          expiresAt,    // Prisma-fält (DB: expires_at)
+        },
+      }),
+    ]);
 
     return NextResponse.json({
       ok: true,
       message: "Konto uppdaterat. Verifieringslänk skapad.",
-      // tills mailutskick är på plats kan du läsa token i network-svaret:
-      // devToken: token,
+      // devToken: token, // avkommentera vid behov under utveckling
     });
   } catch (err) {
+    // Prisma fel – ge tydligt svar
     if (err instanceof Prisma.PrismaClientKnownRequestError) {
-      return NextResponse.json(
-        { ok: false, message: "Databasfel.", code: err.code, meta: err.meta },
-        { status: 500 }
-      );
+      // https://www.prisma.io/docs/orm/reference/error-reference
+      switch (err.code) {
+        case "P2002":
+          return fail(409, "E-postadressen används redan (unik constraint).", {
+            code: err.code,
+            meta: err.meta,
+          });
+        case "P2003":
+          return fail(500, "Databasfel (foreign key).", {
+            code: err.code,
+            meta: err.meta,
+          });
+        case "P2021":
+          return fail(
+            500,
+            "Databasobjekt saknas (t.ex. tabell eller vy). Kontrollera att modellen 'verification' är migrerad till din DB.",
+            { code: err.code, meta: err.meta }
+          );
+        case "P2025":
+          return fail(404, "Post saknas (P2025).", {
+            code: err.code,
+            meta: err.meta,
+          });
+        default:
+          console.error("[auth/register] Prisma error:", err);
+          return fail(500, "Databasfel.", { code: err.code, meta: err.meta });
+      }
     }
+    console.error("[auth/register] error:", err);
     const msg = err instanceof Error ? err.message : "Internt fel.";
-    return NextResponse.json({ ok: false, message: msg }, { status: 500 });
+    return fail(500, msg);
   }
 }

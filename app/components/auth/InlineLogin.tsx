@@ -1,64 +1,78 @@
+// app/components/auth/InlineLogin.tsx
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import React, { useState } from "react";
+import Link from "next/link";
 
 export default function InlineLogin() {
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [pwd, setPwd] = useState("");
+  const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const router = useRouter();
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setBusy(true);
     setErr(null);
+    setLoading(true);
     try {
-      const res = await fetch("/api/auth/login", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ email, password }),
-      });
-      const json = await res.json();
-      if (!res.ok || !json.ok) {
-        setErr(json?.message ?? "Kunde inte logga in");
-        setBusy(false);
-        return;
-      }
-      router.replace("/swipe");
+      // TODO: din faktiska login endpoint här
+      // const res = await fetch("/api/auth/login", { ... })
+      // if (!res.ok) throw new Error("Fel e-post eller lösenord.");
+      // router.replace("/swipe");
     } catch (e) {
-      setErr("Nätverksfel");
-      setBusy(false);
+      setErr(e instanceof Error ? e.message : "Ett fel uppstod.");
+    } finally {
+      setLoading(false);
     }
   }
 
   return (
-    <form onSubmit={onSubmit} className="mt-6 w-full max-w-sm space-y-3">
-      <input
-        type="email"
-        className="w-full rounded-xl bg-zinc-900 px-4 py-3 outline-none ring-1 ring-zinc-800"
-        placeholder="E-post"
-        value={email}
-        onChange={(e) => setEmail(e.target.value)}
-        required
-      />
-      <input
-        type="password"
-        className="w-full rounded-xl bg-zinc-900 px-4 py-3 outline-none ring-1 ring-zinc-800"
-        placeholder="Lösenord"
-        value={password}
-        onChange={(e) => setPassword(e.target.value)}
-        required
-      />
-      {err && <p className="text-sm text-red-400">{err}</p>}
-      <button
-        type="submit"
-        disabled={busy}
-        className="w-full rounded-xl bg-white/10 px-4 py-3 font-medium hover:bg-white/15 disabled:opacity-50"
-      >
-        {busy ? "Loggar in…" : "Logga in"}
-      </button>
-    </form>
+    <div className="mx-auto w-full max-w-md rounded-2xl border border-white/10 bg-black/40 p-6 shadow-xl">
+      <h2 className="mb-4 text-center text-2xl font-semibold">Logga in</h2>
+      {err && (
+        <div className="mb-3 rounded bg-red-500/10 px-3 py-2 text-sm text-red-400">
+          {err}
+        </div>
+      )}
+      <form onSubmit={onSubmit} className="space-y-3">
+        <div>
+          <label className="text-sm text-white/70">E-post</label>
+          <input
+            className="mt-1 w-full rounded-xl border border-white/10 bg-black/50 p-3 outline-none focus:ring-2 focus:ring-white/20"
+            type="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="du@exempel.se"
+            required
+          />
+        </div>
+        <div>
+          <label className="text-sm text-white/70">Lösenord</label>
+          <input
+            className="mt-1 w-full rounded-xl border border-white/10 bg-black/50 p-3 outline-none focus:ring-2 focus:ring-white/20"
+            type="password"
+            value={pwd}
+            onChange={(e) => setPwd(e.target.value)}
+            placeholder="••••••••"
+            required
+          />
+        </div>
+        <button
+          type="submit"
+          disabled={loading}
+          className="w-full rounded-2xl bg-cyan-500 py-3 font-medium text-black hover:bg-cyan-400 disabled:opacity-50"
+        >
+          {loading ? "Loggar in…" : "Logga in"}
+        </button>
+      </form>
+
+      {/* Endast EN länk nedan */}
+      <div className="mt-6 text-center text-sm text-white/70">
+        Ny användare?{" "}
+        <Link href="/onboarding" className="underline">
+          Skapa konto
+        </Link>
+      </div>
+    </div>
   );
 }

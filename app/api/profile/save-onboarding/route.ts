@@ -93,7 +93,6 @@ function extractDob(body: Record<string, unknown>): string | null {
     body.birth_date,
   ];
 
-  // Vanliga nästlade alias
   const nestedPaths: string[][] = [
     ["profile", "dob"],
     ["form", "dob"],
@@ -105,11 +104,7 @@ function extractDob(body: Record<string, unknown>): string | null {
   for (const path of nestedPaths) {
     let cur: unknown = body;
     for (const key of path) {
-      if (
-        cur &&
-        typeof cur === "object" &&
-        key in (cur as Record<string, unknown>)
-      ) {
+      if (cur && typeof cur === "object" && key in (cur as Record<string, unknown>)) {
         cur = (cur as Record<string, unknown>)[key];
       } else {
         cur = undefined;
@@ -122,11 +117,7 @@ function extractDob(body: Record<string, unknown>): string | null {
   // Objekt {year,month,day}
   const ymdObj = candidates.find(
     (c): c is { year: string | number; month: string | number; day: string | number } =>
-      typeof c === "object" &&
-      c !== null &&
-      "year" in c &&
-      "month" in c &&
-      "day" in c
+      typeof c === "object" && c !== null && "year" in c && "month" in c && "day" in c
   );
   if (ymdObj) {
     const y = String(ymdObj.year).padStart(4, "0");
@@ -216,7 +207,6 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // Efter validering: raffinera typ för TS och skapa Date nu
     const dobDate: Date = new Date(dobStr as string);
 
     const user = await prisma.user.findUnique({
