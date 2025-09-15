@@ -61,7 +61,6 @@ function ProviderChip({
             fill
             sizes="20px"
             onError={() => {
-              // Fallback om du råkat döpa filerna till .svg.svg
               if (base) setSrc(`/providers/${base}.svg.svg`);
             }}
           />
@@ -179,18 +178,18 @@ function SearchBox({
               className="flex w-full items-center gap-3 p-2 text-left hover:bg-white/10"
             >
               <div className="relative h-10 w-7 shrink-0 overflow-hidden rounded">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                {it.poster ? (
-                  <img
-                    src={it.poster}
-                    alt={it.title}
-                    className="h-full w-full object-cover"
-                  />
-                ) : (
-                  <div className="grid h-full w-full place-items-center bg-white/10 text-[10px]">
-                    No
-                  </div>
-                )}
+                {/* Next Image används för att undvika eslint-varning; unoptimized = ingen extra konfiguration */}
+                <Image
+                  src={
+                    it.poster ??
+                    "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='28' height='40'/%3E"
+                  }
+                  alt={it.title}
+                  width={28}
+                  height={40}
+                  className="h-full w-full object-cover"
+                  unoptimized
+                />
               </div>
               <div className="min-w-0">
                 <div className="truncate text-sm">
@@ -206,9 +205,9 @@ function SearchBox({
 }
 
 // ---------- constants ----------
-const LANGS = ["sv", "en"];
-const LOCALES = ["sv-SE", "en-US"];
-const REGIONS = ["SE", "NO", "DK", "FI"];
+const LANGS = ["sv", "en"] as const;
+const LOCALES = ["sv-SE", "en-US"] as const;
+const REGIONS = ["SE", "NO", "DK", "FI"] as const;
 
 const PROVIDERS = [
   "Netflix",
@@ -220,7 +219,7 @@ const PROVIDERS = [
   "SkyShowtime",
   "SVT Play",
   "TV4 Play",
-];
+] as const;
 
 const GENRES = [
   "Action",
@@ -235,7 +234,7 @@ const GENRES = [
   "Sci-Fi",
   "Thriller",
   "Dokumentär",
-];
+] as const;
 
 export default function OnboardingPage() {
   const router = useRouter();
@@ -243,9 +242,9 @@ export default function OnboardingPage() {
   // state
   const [displayName, setDisplayName] = useState("");
   const [dob, setDob] = useState("");
-  const [language, setLanguage] = useState("sv");
-  const [region, setRegion] = useState("SE");
-  const [locale, setLocale] = useState("sv-SE");
+  const [language, setLanguage] = useState<(typeof LANGS)[number]>("sv");
+  const [region, setRegion] = useState<(typeof REGIONS)[number]>("SE");
+  const [locale, setLocale] = useState<(typeof LOCALES)[number]>("sv-SE");
   const [providers, setProviders] = useState<string[]>([]);
   const [favoriteMovie, setFavoriteMovie] = useState<Fav | null>(null);
   const [favoriteShow, setFavoriteShow] = useState<Fav | null>(null);
@@ -301,7 +300,6 @@ export default function OnboardingPage() {
       if (!res.ok || !data?.ok) {
         throw new Error(data?.message || "Ett fel uppstod.");
       }
-      // vidare till skapa login
       router.replace("/auth/register");
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Ett fel uppstod.");
@@ -357,9 +355,11 @@ export default function OnboardingPage() {
               <select
                 className="w-full rounded-xl border border-white/10 bg-black/40 p-3 outline-none focus:ring-2 focus:ring-white/20"
                 value={language}
-                onChange={(e) => setLanguage(e.target.value)}
+                onChange={(e) =>
+                  setLanguage(e.target.value as (typeof LANGS)[number])
+                }
               >
-                {["sv", "en"].map((l) => (
+                {LANGS.map((l) => (
                   <option key={l} value={l}>
                     {l}
                   </option>
@@ -371,10 +371,12 @@ export default function OnboardingPage() {
               <select
                 className="w-full rounded-xl border border-white/10 bg-black/40 p-3 outline-none focus:ring-2 focus:ring-white/20"
                 value={region}
-                onChange={(e) => setRegion(e.target.value)}
+                onChange={(e) =>
+                  setRegion(e.target.value as (typeof REGIONS)[number])
+                }
                 required
               >
-                {["SE", "NO", "DK", "FI"].map((r) => (
+                {REGIONS.map((r) => (
                   <option key={r} value={r}>
                     {r}
                   </option>
@@ -386,10 +388,12 @@ export default function OnboardingPage() {
               <select
                 className="w-full rounded-xl border border-white/10 bg-black/40 p-3 outline-none focus:ring-2 focus:ring-white/20"
                 value={locale}
-                onChange={(e) => setLocale(e.target.value)}
+                onChange={(e) =>
+                  setLocale(e.target.value as (typeof LOCALES)[number])
+                }
                 required
               >
-                {["sv-SE", "en-US"].map((l) => (
+                {LOCALES.map((l) => (
                   <option key={l} value={l}>
                     {l}
                   </option>

@@ -66,6 +66,8 @@ model Verification {
 
   user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@index([email],  map: "idx_verifications_email")
+  @@index([userId], map: "idx_verifications_user_id")
   @@map("verifications")
 }
 
