@@ -23,7 +23,6 @@ function jsonRes(
 }
 
 function computeOrigin(req: NextRequest): string {
-  // Företräde: NEXT_PUBLIC_APP_URL om satt
   const env = process.env.NEXT_PUBLIC_APP_URL;
   if (env) return env.replace(/\/$/, "");
   const u = new URL(req.url);
@@ -34,7 +33,7 @@ async function sendVerifyEmail(to: string, link: string) {
   const apiKey = process.env.RESEND_API_KEY;
   const from = process.env.RESEND_FROM || "NextWatch <noreply@nextwatch.se>";
   if (!apiKey) {
-    return { sent: false as const, reason: "missing_resend_api_key" as const };
+    return { ok: false as const, reason: "missing_resend_api_key" as const };
   }
   const html = `
     <div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif">
@@ -53,14 +52,14 @@ async function sendVerifyEmail(to: string, link: string) {
     },
     body: JSON.stringify({ from, to, subject: "Bekräfta din e-post", html }),
   });
-  const json = (await res.json().catch(() => ({}))) as unknown;
-  if (!res.ok) return { sent: false as const, reason: "provider_error", provider: json };
-  return { sent: true as const, provider: json };
+  const provider = await res.json().catch(() => ({}));
+  return { ok: res.ok, status: res.status, provider };
 }
 
 export async function POST(req: NextRequest) {
   try {
-    // IMPORTANT: await cookies()
+    const debug = new URL(req.url).searchParams.get("debug") === "1";
+
     const jar = await cookies();
     const uid = jar.get("nw_uid")?.value ?? null;
     if (!uid) return jsonRes(401, "Ingen session. Logga in igen.");
@@ -70,7 +69,7 @@ export async function POST(req: NextRequest) {
     const password = (body.password ?? "").trim();
     if (!email || !password) return jsonRes(400, "E-post och lösenord krävs.");
 
-    // Preflight: kontroll av kolumner i aktiva DB
+    // Preflight: kolumner
     const [usersCols, verCols] = await Promise.all([
       prisma.$queryRaw<Array<{ column_name: string }>>`
         SELECT column_name FROM information_schema.columns
@@ -105,7 +104,7 @@ export async function POST(req: NextRequest) {
     await prisma.$transaction([
       prisma.user.update({
         where: { id: uid },
-        data: { email, passwordHash: hash }, // @map("password_hash")
+        data: { email, passwordHash: hash },
       }),
       prisma.verification.create({
         data: { token, userId: uid, email, name: null, expiresAt },
@@ -116,19 +115,20 @@ export async function POST(req: NextRequest) {
     const link = `${origin}/auth/verify?token=${token}`;
     const mailRes = await sendVerifyEmail(email, link);
 
+    // I debug-läge skickar vi tillbaka hela provider-responsen
     return NextResponse.json({
       ok: true,
-      message: mailRes.sent
+      message: mailRes.ok
         ? "Konto uppdaterat. Verifieringslänk skickad."
         : "Konto uppdaterat. Kunde inte skicka e-post – kopiera länken nedan.",
       verifyUrl: link,
-      emailSent: mailRes.sent,
+      emailSent: mailRes.ok,
+      ...(debug ? { emailProvider: mailRes.provider, emailStatus: mailRes.status } : {}),
     });
   } catch (err) {
     if (err instanceof Prisma.PrismaClientKnownRequestError) {
       return jsonRes(500, `Databasfel (${err.code}).`, { code: err.code, meta: err.meta });
     }
-    console.error("[auth/register] error:", err);
     const msg = err instanceof Error ? err.message : "Internt fel.";
     return jsonRes(500, msg);
   }
