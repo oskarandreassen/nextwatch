@@ -23,7 +23,7 @@ type ApiRes = {
   message?: string;
 };
 
-const HIDE_KEY = "nw_disliked_until"; // { [tmdbId]: epoch_ms_until }
+const HIDE_KEY = "nw_disliked_until";
 
 function readHideMap(): Record<string, number> {
   try {
@@ -60,7 +60,7 @@ export default function SwipePageClient() {
   const controls = useAnimation();
 
   const topCard = cards[0];
-  const restCards = useMemo(() => cards.slice(1), [cards]);
+  const hasMore = useMemo(() => Boolean(cursor), [cursor]);
 
   const loadMore = useCallback(
     async (initial: boolean) => {
@@ -83,17 +83,15 @@ export default function SwipePageClient() {
     [cursor, loading]
   );
 
-  // Första laddningen
   useEffect(() => {
     void loadMore(true);
   }, [loadMore]);
 
-  // Auto-load när det tar slut
   useEffect(() => {
-    if (!loading && cards.length < 6 && cursor) {
+    if (!loading && cards.length < 3 && hasMore) {
       void loadMore(false);
     }
-  }, [cards.length, cursor, loading, loadMore]);
+  }, [cards.length, hasMore, loading, loadMore]);
 
   function popTop() {
     setFlippedId(null);
@@ -134,56 +132,52 @@ export default function SwipePageClient() {
     setFlippedId((prev) => (prev === c.id ? null : c.id));
   }
 
-  const swipeThreshold = 120; // px
+  // Thresholds: funkar bättre på mobil (vi accepterar antingen lång sträcka eller hög velocity)
+  const DIST_THRESHOLD = 110;         // px
+  const VELOCITY_THRESHOLD = 700;     // px/s ungefär
 
   return (
-    <div className="relative mx-auto w-full max-w-md" style={{ minHeight: 560 }}>
+    <div className="relative mx-auto w-full max-w-md" style={{ minHeight: 620 }}>
       {/* Toast */}
       {toast && (
-        <div className="fixed bottom-24 left-1/2 -translate-x-1/2 rounded bg-black/80 px-4 py-2 text-sm text-white shadow">
+        <div className="fixed bottom-36 left-1/2 -translate-x-1/2 rounded-xl bg-black/85 px-4 py-2 text-sm text-white shadow">
           {toast}
         </div>
       )}
 
-      {/* UNDERLIGGANDE KORT (desaturerade & tydligare offset) */}
-      {restCards.slice(0, 4).map((c, i) => (
-        <div
-          key={c.id}
-          className="absolute inset-0 z-0 flex items-center justify-center"
-          style={{
-            transform: `translateY(${24 * (i + 1)}px) scale(${1 - (i + 1) * 0.04})`,
-            opacity: 0.8 - i * 0.15,
-            filter: "saturate(0.85)",
-          }}
-        >
-          <StaticCard card={c} flipped={false} onFlip={() => {}} />
-        </div>
-      ))}
-
-      {/* TOPPKORT (draggable) */}
+      {/* ENDAST TOPPKORTET RENDERAS */}
       {topCard ? (
         <motion.div
           key={topCard.id}
-          className="absolute inset-0 z-10 flex items-center justify-center"
+          className="absolute inset-x-0 top-0 z-10 flex items-center justify-center"
           animate={controls}
           drag="x"
           dragConstraints={{ left: 0, right: 0 }}
-          dragElastic={0.2}
+          dragElastic={0.18}
           onDragEnd={(_, info) => {
-            const x = info.offset.x;
-            if (x > swipeThreshold) {
-              void controls.start({ x: 500, rotate: 20, opacity: 0, transition: { duration: 0.25 } }).then(() => {
+            const { x } = info.offset;
+            const v = info.velocity.x;
+
+            // Swipe RIGHT (like)
+            if (x > DIST_THRESHOLD || v > VELOCITY_THRESHOLD) {
+              void controls.start({ x: 520, rotate: 18, opacity: 0, transition: { duration: 0.22 } }).then(() => {
                 void handleLike(topCard);
                 void controls.start({ x: 0, rotate: 0, opacity: 1 });
               });
-            } else if (x < -swipeThreshold) {
-              void controls.start({ x: -500, rotate: -20, opacity: 0, transition: { duration: 0.25 } }).then(() => {
+              return;
+            }
+
+            // Swipe LEFT (dislike)
+            if (x < -DIST_THRESHOLD || v < -VELOCITY_THRESHOLD) {
+              void controls.start({ x: -520, rotate: -18, opacity: 0, transition: { duration: 0.22 } }).then(() => {
                 void handleDislike(topCard);
                 void controls.start({ x: 0, rotate: 0, opacity: 1 });
               });
-            } else {
-              void controls.start({ x: 0, rotate: 0, transition: { type: "spring", stiffness: 300, damping: 25 } });
+              return;
             }
+
+            // snap back
+            void controls.start({ x: 0, rotate: 0, transition: { type: "spring", stiffness: 320, damping: 28 } });
           }}
         >
           <StaticCard
@@ -198,40 +192,45 @@ export default function SwipePageClient() {
         </div>
       )}
 
-      {/* FOOTER-KNAPPAR (enda platsen) */}
-      <div className="pointer-events-auto absolute inset-x-0 bottom-3 z-20 flex items-center justify-center gap-6">
+      {/* FOOTER-KNAPPAR – längre under, större, tydligare */}
+      <div className="pointer-events-auto absolute inset-x-0 bottom-6 z-20 flex items-center justify-center gap-8">
         <button
           aria-label="Nej"
           onClick={() => topCard && void handleDislike(topCard)}
-          className="h-12 w-12 rounded-full bg-white/10 text-red-400 ring-1 ring-white/20 hover:bg-white/20"
+          className="h-16 w-16 rounded-full bg-red-500/15 text-red-400 ring-2 ring-red-400/40 backdrop-blur hover:bg-red-500/25 transition"
+          title="Nej"
         >
-          ✖
+          <span className="text-2xl">✖</span>
         </button>
+
         <button
           aria-label="Info"
           onClick={() => topCard && onInfo(topCard)}
-          className="h-12 w-12 rounded-full bg-white/10 text-white ring-1 ring-white/20 hover:bg-white/20"
+          className="h-14 w-14 rounded-full bg-white/10 text-white ring-1 ring-white/30 backdrop-blur hover:bg-white/20 transition"
+          title="Info"
         >
-          i
+          <span className="text-xl">i</span>
         </button>
+
         <button
           aria-label="Gilla"
           onClick={() => topCard && void handleLike(topCard)}
-          className="h-12 w-12 rounded-full bg-white/10 text-green-400 ring-1 ring-white/20 hover:bg-white/20"
+          className="h-16 w-16 rounded-full bg-emerald-500/15 text-emerald-400 ring-2 ring-emerald-400/40 backdrop-blur hover:bg-emerald-500/25 transition"
+          title="Gilla"
         >
-          ❤
+          <span className="text-2xl">❤</span>
         </button>
       </div>
     </div>
   );
 }
 
-/* ============ KORT-KOMPONENTER (utan knappar på kortet) ============ */
+/* ============ Kort (utan knappar i overlay) ============ */
 
 function StaticCard({ card, flipped, onFlip }: { card: Card; flipped: boolean; onFlip: () => void }) {
   return (
     <div
-      className="relative h-[500px] w-[340px] cursor-pointer [perspective:1000px]"
+      className="relative h-[520px] w-[360px] cursor-pointer [perspective:1000px]"
       onClick={onFlip}
     >
       <div
@@ -261,10 +260,10 @@ function Front({ card }: { card: Card }) {
         <div className="flex h-full w-full items-center justify-center bg-neutral-800">{card.title}</div>
       )}
 
-      {/* Titel-overlay (endast text, inga knappar) */}
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 p-3">
-        <div className="h-24 bg-gradient-to-t from-black/85 to-transparent" />
-        <div className="-mt-20 px-1">
+      {/* Titel-overlay */}
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 p-4">
+        <div className="h-28 bg-gradient-to-t from-black/90 to-transparent" />
+        <div className="-mt-24 px-1">
           <div className="text-lg font-semibold text-white drop-shadow">
             {card.title}
             {card.year ? <span className="ml-2 opacity-80">({card.year})</span> : null}
