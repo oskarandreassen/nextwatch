@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { motion, useAnimation } from "framer-motion";
 
 type MediaType = "movie" | "tv";
@@ -38,13 +38,11 @@ function readHideMap(): Record<string, number> {
 function writeHideMap(map: Record<string, number>) {
   localStorage.setItem(HIDE_KEY, JSON.stringify(map));
 }
-
 function isHidden(tmdbId: number): boolean {
   const map = readHideMap();
   const until = map[String(tmdbId)];
   return typeof until === "number" && Date.now() < until;
 }
-
 function hideFor7Days(tmdbId: number) {
   const map = readHideMap();
   const sevenDays = 7 * 24 * 60 * 60 * 1000;
@@ -60,7 +58,6 @@ export default function SwipePageClient() {
   const [flippedId, setFlippedId] = useState<string | null>(null);
 
   const controls = useAnimation();
-  const containerRef = useRef<HTMLDivElement | null>(null);
 
   const topCard = cards[0];
   const restCards = useMemo(() => cards.slice(1), [cards]);
@@ -86,12 +83,12 @@ export default function SwipePageClient() {
     [cursor, loading]
   );
 
-  // Första laddning
+  // Första laddningen
   useEffect(() => {
     void loadMore(true);
   }, [loadMore]);
 
-  // Autoladda när det börjar ta slut
+  // Auto-load när det tar slut
   useEffect(() => {
     if (!loading && cards.length < 6 && cursor) {
       void loadMore(false);
@@ -140,7 +137,7 @@ export default function SwipePageClient() {
   const swipeThreshold = 120; // px
 
   return (
-    <div ref={containerRef} className="relative mx-auto w-full max-w-md" style={{ minHeight: 520 }}>
+    <div className="relative mx-auto w-full max-w-md" style={{ minHeight: 560 }}>
       {/* Toast */}
       {toast && (
         <div className="fixed bottom-24 left-1/2 -translate-x-1/2 rounded bg-black/80 px-4 py-2 text-sm text-white shadow">
@@ -148,22 +145,26 @@ export default function SwipePageClient() {
         </div>
       )}
 
-      {/* stack understa korten */}
+      {/* UNDERLIGGANDE KORT (desaturerade & tydligare offset) */}
       {restCards.slice(0, 4).map((c, i) => (
         <div
           key={c.id}
-          className="absolute inset-0 flex items-center justify-center"
-          style={{ transform: `translateY(${12 * (restCards.length - i)}px) scale(${1 - i * 0.03})`, opacity: 0.9 - i * 0.12 }}
+          className="absolute inset-0 z-0 flex items-center justify-center"
+          style={{
+            transform: `translateY(${24 * (i + 1)}px) scale(${1 - (i + 1) * 0.04})`,
+            opacity: 0.8 - i * 0.15,
+            filter: "saturate(0.85)",
+          }}
         >
           <StaticCard card={c} flipped={false} onFlip={() => {}} />
         </div>
       ))}
 
-      {/* top-kort */}
+      {/* TOPPKORT (draggable) */}
       {topCard ? (
         <motion.div
           key={topCard.id}
-          className="absolute inset-0 flex items-center justify-center"
+          className="absolute inset-0 z-10 flex items-center justify-center"
           animate={controls}
           drag="x"
           dragConstraints={{ left: 0, right: 0 }}
@@ -197,8 +198,8 @@ export default function SwipePageClient() {
         </div>
       )}
 
-      {/* knappar */}
-      <div className="pointer-events-auto absolute inset-x-0 bottom-3 flex items-center justify-center gap-6">
+      {/* FOOTER-KNAPPAR (enda platsen) */}
+      <div className="pointer-events-auto absolute inset-x-0 bottom-3 z-20 flex items-center justify-center gap-6">
         <button
           aria-label="Nej"
           onClick={() => topCard && void handleDislike(topCard)}
@@ -225,21 +226,24 @@ export default function SwipePageClient() {
   );
 }
 
-/* ==================== KORT ==================== */
+/* ============ KORT-KOMPONENTER (utan knappar på kortet) ============ */
 
 function StaticCard({ card, flipped, onFlip }: { card: Card; flipped: boolean; onFlip: () => void }) {
   return (
-    <div className="relative h-[480px] w-[320px] cursor-pointer [perspective:1000px]" onClick={onFlip}>
+    <div
+      className="relative h-[500px] w-[340px] cursor-pointer [perspective:1000px]"
+      onClick={onFlip}
+    >
       <div
-        className="relative h-full w-full rounded-xl border border-white/15 bg-black/40 shadow-lg transition-transform duration-300 [transform-style:preserve-3d]"
+        className="relative h-full w-full rounded-2xl border border-white/15 bg-black shadow-xl transition-transform duration-300 [transform-style:preserve-3d]"
         style={{ transform: flipped ? "rotateY(180deg)" : "rotateY(0deg)" }}
       >
-        {/* Front */}
-        <div className="absolute inset-0 p-2 [backface-visibility:hidden]">
+        {/* FRONT */}
+        <div className="absolute inset-0 [backface-visibility:hidden]">
           <Front card={card} />
         </div>
-        {/* Back */}
-        <div className="absolute inset-0 rotate-y-180 p-3 [backface-visibility:hidden] [transform:rotateY(180deg)]">
+        {/* BACK */}
+        <div className="absolute inset-0 rotate-y-180 [backface-visibility:hidden] [transform:rotateY(180deg)]">
           <Back card={card} />
         </div>
       </div>
@@ -249,22 +253,26 @@ function StaticCard({ card, flipped, onFlip }: { card: Card; flipped: boolean; o
 
 function Front({ card }: { card: Card }) {
   return (
-    <div className="relative h-full w-full overflow-hidden rounded-xl">
+    <div className="relative h-full w-full overflow-hidden rounded-2xl">
       {card.poster ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img src={card.poster} alt={card.title} className="h-full w-full object-cover" loading="lazy" />
       ) : (
         <div className="flex h-full w-full items-center justify-center bg-neutral-800">{card.title}</div>
       )}
-      <div className="pointer-events-none absolute inset-x-0 bottom-0 flex flex-col gap-1 p-3">
-        <div className="h-24 bg-gradient-to-t from-black/80 to-transparent" />
-        <div className="-mt-20 flex flex-col px-1">
+
+      {/* Titel-overlay (endast text, inga knappar) */}
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 p-3">
+        <div className="h-24 bg-gradient-to-t from-black/85 to-transparent" />
+        <div className="-mt-20 px-1">
           <div className="text-lg font-semibold text-white drop-shadow">
             {card.title}
             {card.year ? <span className="ml-2 opacity-80">({card.year})</span> : null}
           </div>
         </div>
       </div>
+
+      {/* Rating nere till höger */}
       {typeof card.rating === "number" ? (
         <div className="absolute bottom-2 right-2 rounded-md bg-black/70 px-2 py-1 text-xs font-semibold text-yellow-300">
           ★ {card.rating.toFixed(1)}
@@ -276,7 +284,7 @@ function Front({ card }: { card: Card }) {
 
 function Back({ card }: { card: Card }) {
   return (
-    <div className="flex h-full w-full flex-col gap-2 rounded-xl bg-neutral-950/90 p-3">
+    <div className="flex h-full w-full flex-col gap-2 rounded-2xl bg-neutral-950 p-4">
       <div className="text-base font-semibold">
         {card.title} {card.year ? <span className="opacity-70">({card.year})</span> : null}
       </div>
