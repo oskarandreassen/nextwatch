@@ -18,34 +18,30 @@ type ApiResponse =
   | { ok: true; items: ApiItem[] }
   | { ok: false; message?: string };
 
-function buildCookieHeader(): string {
-  // Skicka vidare alla cookies till API-routen så den kan identifiera användaren
-  const jar = cookies();
+/** Skicka vidare alla cookies till API-routen så den kan identifiera användaren */
+async function buildCookieHeader(): Promise<string> {
+  const jar = await cookies();
   const all = jar.getAll();
-  return all.map(c => `${c.name}=${encodeURIComponent(c.value)}`).join('; ');
+  return all.map((c) => `${c.name}=${encodeURIComponent(c.value)}`).join('; ');
 }
 
 async function getWatchlistServer(): Promise<ApiItem[]> {
-  const host = (await headers()).get('host');
+  const hdrs = await headers(); // din typdeklaration gör headers() async
+  const host = hdrs.get('host') ?? 'localhost:3000';
   const proto =
-    (await headers()).get('x-forwarded-proto') ??
-    (host?.includes('localhost') ? 'http' : 'https');
+    hdrs.get('x-forwarded-proto') ??
+    (host.includes('localhost') ? 'http' : 'https');
 
   const url = `${proto}://${host}/api/watchlist/list`;
   const res = await fetch(url, {
     method: 'GET',
     headers: {
-      // kritiskt: vidarebefordra cookies
-      Cookie: buildCookieHeader(),
+      Cookie: await buildCookieHeader(),
     },
-    // important: no-store så vi inte får cachead tom data
     cache: 'no-store',
   });
 
-  if (!res.ok) {
-    // Logiskt tomt i UI om API fallerar, men hindra inte sidan
-    return [];
-  }
+  if (!res.ok) return [];
   const data = (await res.json()) as ApiResponse;
   if (!('ok' in data) || !data.ok) return [];
   return data.items;
@@ -54,7 +50,6 @@ async function getWatchlistServer(): Promise<ApiItem[]> {
 export default async function Page() {
   const rows = await getWatchlistServer();
 
-  // Mappa till props för klientkomponenten
   const items = rows.map((r) => ({
     id: r.tmdbId,
     tmdbType: r.tmdbType,
