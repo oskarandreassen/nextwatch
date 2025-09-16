@@ -1,7 +1,7 @@
 'use client';
 
 import Image from 'next/image';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import Modal from '@/app/components/ui/Modal';
 import WatchNowButton from '@/app/components/watch/WatchNowButton';
 
@@ -81,6 +81,10 @@ export default function WatchlistClient({ items }: { items: WatchItem[] }) {
     return out;
   }, [providers]);
 
+  if (!items.length) {
+    return <p className="text-neutral-400">Din watchlist är tom.</p>;
+  }
+
   return (
     <>
       {/* Grid med klickbara kort */}
@@ -105,7 +109,7 @@ export default function WatchlistClient({ items }: { items: WatchItem[] }) {
               <div className="truncate">
                 <p className="truncate text-sm font-semibold text-white">{it.title}</p>
                 <p className="text-xs text-neutral-400">
-                  {it.year ?? ''}{it.year && it.rating ? ' • ' : ''}{it.rating ? `${it.rating.toFixed(1)}` : ''}
+                  {it.year ?? ''}{it.year && it.rating ? ' • ' : ''}{typeof it.rating === 'number' ? it.rating.toFixed(1) : ''}
                 </p>
               </div>
               <span className="ml-2 rounded-md bg-neutral-700 px-2 py-0.5 text-xs text-neutral-200">
@@ -135,7 +139,7 @@ export default function WatchlistClient({ items }: { items: WatchItem[] }) {
                 {active.title}{active.year ? ` (${active.year})` : ''}
               </h2>
               <p className="mt-1 text-sm text-neutral-300">
-                {active.rating ? `Betyg: ${active.rating.toFixed(1)}` : 'Betyg saknas'}
+                {typeof active.rating === 'number' ? `Betyg: ${active.rating.toFixed(1)}` : 'Betyg saknas'}
               </p>
 
               <p className="mt-3 text-sm leading-relaxed text-neutral-200">
