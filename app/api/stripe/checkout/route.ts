@@ -1,37 +1,38 @@
-import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
+// app/api/stripe/checkout/route.ts
+import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
-import { prisma } from "../../../../lib/prisma";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
-
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
   try {
-    const c = await cookies();
-    const uid = c.get("nw_uid")?.value;
-    if (!uid) return NextResponse.json({ ok:false, error:"no cookie" }, { status:400 });
+    const key = process.env.STRIPE_SECRET_KEY;
+    if (!key) {
+      // Ingen Stripe i denna miljö – faila snällt vid RUNTIME (inte vid build)
+      return NextResponse.json(
+        { ok: false, message: "Stripe is not configured in this environment." },
+        { status: 503 }
+      );
+    }
 
-    // se till att user finns
-    await prisma.user.upsert({ where:{ id:uid }, update:{}, create:{ id:uid } });
+    const stripe = new Stripe(key, { apiVersion: "2025-08-27.basil" });
 
-    const origin = new URL(req.url).origin;
+    const body = (await req.json()) as { priceId: string; successUrl: string; cancelUrl: string };
+    if (!body?.priceId || !body?.successUrl || !body?.cancelUrl) {
+      return NextResponse.json({ ok: false, message: "Invalid payload" }, { status: 400 });
+    }
+
     const session = await stripe.checkout.sessions.create({
-      mode: "payment",
-      line_items: [{ price: process.env.STRIPE_PRICE_LIFETIME!, quantity: 1 }],
-      success_url: `${origin}/premium/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${origin}/premium?canceled=1`,
-      client_reference_id: uid,
-      metadata: { userId: uid },
-      locale: "sv",
-      automatic_tax: { enabled: true } // du valde Stripe Tax: Ja
+      mode: "subscription",
+      line_items: [{ price: body.priceId, quantity: 1 }],
+      success_url: body.successUrl,
+      cancel_url: body.cancelUrl,
     });
 
-    return NextResponse.json({ ok:true, url: session.url });
-  } catch (e: unknown) {
-    const msg = e instanceof Error ? e.message : String(e);
-    return NextResponse.json({ ok:false, error: msg }, { status:500 });
+    return NextResponse.json({ ok: true, url: session.url }, { status: 200 });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Internal error";
+    return NextResponse.json({ ok: false, message }, { status: 500 });
   }
 }
