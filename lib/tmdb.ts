@@ -31,8 +31,9 @@ export type TmdbTv = {
   vote_count?: number;
   genre_ids?: number[];
 };
+ 
+const READ_TOKEN = process.env.TMDB_READ_TOKEN ?? process.env.TMDB_TOKEN;
 
-const READ_TOKEN = process.env.TMDB_READ_TOKEN;
 
 /** Minimal typed GET against TMDB v3. */
 export async function tmdbGet<T>(
