@@ -1,6 +1,7 @@
 'use client';
 
 import * as React from 'react';
+import Image from 'next/image';
 
 const IMAGES: string[] = [
   // lätta tmdb-posterexempel – kan bytas mot dina egna
@@ -18,12 +19,17 @@ export default function HeroReel() {
       <div className="absolute inset-0 bg-gradient-to-b from-black/60 via-black/30 to-black/80" />
       <div className="animate-[scrollX_40s_linear_infinite] flex gap-4 px-4 py-8">
         {[...IMAGES, ...IMAGES].map((src, i) => (
-          <div key={i} className="shrink-0 w-40 h-60 rounded-xl overflow-hidden bg-neutral-800/40">
-            <img
+          <div
+            key={i}
+            className="relative h-60 w-40 shrink-0 overflow-hidden rounded-xl bg-neutral-800/40"
+          >
+            <Image
               src={src}
               alt=""
-              loading="lazy"
-              className="w-full h-full object-cover opacity-80"
+              fill
+              sizes="(max-width: 768px) 25vw, 10vw"
+              className="object-cover opacity-80"
+              priority={false}
             />
           </div>
         ))}

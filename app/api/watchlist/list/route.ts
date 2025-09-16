@@ -64,7 +64,7 @@ function normalize(x: TmdbTitle, mediaType: "movie" | "tv"): Card {
   };
 }
 
-export async function GET(_req: NextRequest) {
+export async function POST() {
   try {
     const jar = await cookies();
     const uid = jar.get("nw_uid")?.value ?? null;
@@ -88,7 +88,7 @@ export async function GET(_req: NextRequest) {
     );
 
     return NextResponse.json({ ok: true, items });
-  } catch (err) {
+  } catch {
     return NextResponse.json({ ok: false, items: [], message: "Internt fel" }, { status: 500 });
   }
 }

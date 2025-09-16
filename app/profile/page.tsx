@@ -90,7 +90,8 @@ export default async function ProfilePage() {
 
   return (
     <div className="mx-auto max-w-6xl p-4">
-      <h1 className="text-2xl font-semibold mb-4">Profil</h1>
+      <h1 className="mb-4 text-2xl font-semibold">Profil</h1>
+      {/* ProfileClient hanterar nu null i initial */}
       <ProfileClient initial={initial} />
     </div>
   );

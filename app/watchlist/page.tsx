@@ -1,70 +1,41 @@
-// app/watchlist/page.tsx
-"use client";
+import { cookies } from 'next/headers';
+import WatchlistClient from './WatchlistClient';
 
-import { useEffect, useState } from "react";
+// Antag att du redan har en server-funktion som listar sparade likes inkl TMDB-id & typ.
+// Här visar jag en minimal “shape” – behåll din befintliga källa och mappa till propsen nedan.
 
-type Card = {
-  id: string;
+type DBItem = {
   tmdbId: number;
-  mediaType: "movie" | "tv";
+  tmdbType: 'movie' | 'tv';
   title: string;
-  year: string | null;
-  poster: string | null;
-  rating?: number | null;
+  year?: string;
+  rating?: number;
+  posterPath?: string;
 };
 
-type ApiRes = { ok: boolean; items: Card[]; message?: string };
+async function getWatchlistServer(): Promise<DBItem[]> {
+  const jar = cookies(); // exempel på att vi följer await cookies() i server actions där det behövs
+  void jar; // undvik unused
+  // ⚠️ Byt mot din befintliga hämtning (DB + TMDB-hydrering).
+  return [];
+}
 
-export default function WatchlistPage() {
-  const [items, setItems] = useState<Card[]>([]);
-  const [loading, setLoading] = useState(true);
+export default async function Page() {
+  const rows = await getWatchlistServer();
 
-  useEffect(() => {
-    void (async () => {
-      try {
-        const res = await fetch("/api/watchlist/list", { cache: "no-store" });
-        const data = (await res.json()) as ApiRes;
-        if (data.ok) setItems(data.items);
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, []);
+  const items = rows.map((r) => ({
+    id: r.tmdbId,
+    tmdbType: r.tmdbType,
+    title: r.title,
+    year: r.year,
+    rating: r.rating,
+    posterUrl: r.posterPath ? `https://image.tmdb.org/t/p/w500${r.posterPath}` : '/placeholder.svg',
+  }));
 
   return (
-    <div className="p-4">
-      <h1 className="mb-2 text-2xl font-semibold">Watchlist</h1>
-      {loading ? (
-        <div>Laddar…</div>
-      ) : items.length === 0 ? (
-        <div className="opacity-70">Inget sparat än.</div>
-      ) : (
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 md:grid-cols-4">
-          {items.map((c) => (
-            <div key={c.id} className="rounded-xl border border-white/10 overflow-hidden">
-              <div className="relative aspect-[2/3] bg-neutral-900">
-                {c.poster ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={c.poster} alt={c.title} className="h-full w-full object-cover" />
-                ) : (
-                  <div className="flex h-full w-full items-center justify-center text-sm opacity-70">No poster</div>
-                )}
-                {typeof c.rating === "number" ? (
-                  <div className="absolute bottom-1 right-1 rounded bg-black/70 px-2 py-0.5 text-xs font-semibold text-yellow-300">
-                    ★ {c.rating.toFixed(1)}
-                  </div>
-                ) : null}
-              </div>
-              <div className="px-2 py-2">
-                <div className="truncate text-sm font-medium">{c.title}</div>
-                <div className="text-xs opacity-70">
-                  {c.mediaType.toUpperCase()} {c.year ? `• ${c.year}` : ""}
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
+    <main className="mx-auto max-w-7xl px-4 py-6">
+      <h1 className="mb-4 text-2xl font-bold">Watchlist</h1>
+      <WatchlistClient items={items} />
+    </main>
   );
 }

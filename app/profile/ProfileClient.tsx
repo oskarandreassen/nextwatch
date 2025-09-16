@@ -1,265 +1,243 @@
-"use client";
+'use client';
 
-import { useEffect, useMemo, useState } from "react";
-import type { ProfileDTO } from "./page";
+import { useEffect, useState } from 'react';
 
-type Props = { initial: ProfileDTO | null };
+type Profile = {
+  displayName: string;
+  dob?: string; // ISO yyyy-mm-dd
+  favoriteGenres: string[];
+  dislikedGenres: string[];
+  providers: string[]; // ex 'Netflix', 'Disney Plus'
+  uiLanguage: string;  // ex 'sv', 'en'
+};
 
-function getErrorMessage(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (typeof err === "string") return err;
-  return "Något gick fel.";
+type SaveResp = { ok: boolean; message?: string };
+
+// Tillåt null i initial-props (matchar ProfileDTO från serversidan)
+type InitialProfile = {
+  displayName?: string | null;
+  dob?: string | null;
+  favoriteGenres?: string[] | null;
+  dislikedGenres?: string[] | null;
+  providers?: string[] | null;
+  uiLanguage?: string | null;
+} | null;
+
+const ALL_LANGS: { code: string; label: string }[] = [
+  { code: 'sv', label: 'Svenska' },
+  { code: 'en', label: 'English' },
+  // lägg fler vid behov
+];
+
+// Anta att du redan har dessa listor i projektet – annars kan vi läsa från TMDB helpers
+const ALL_GENRES = [
+  'Action', 'Adventure', 'Animation', 'Comedy', 'Crime', 'Documentary', 'Drama',
+  'Family', 'Fantasy', 'History', 'Horror', 'Music', 'Mystery', 'Romance',
+  'Science Fiction', 'TV Movie', 'Thriller', 'War', 'Western'
+];
+
+const ALL_PROVIDERS = [
+  'Netflix', 'Disney Plus', 'HBO Max', 'Amazon Prime Video', 'Viaplay', 'Apple TV Plus', 'SkyShowtime'
+];
+
+async function loadProfile(): Promise<Partial<Profile>> {
+  const res = await fetch('/api/profile/get', { cache: 'no-store' });
+  if (!res.ok) throw new Error('Failed to load profile');
+  // /api/profile/get kan returnera null i vissa fält; normalisera varsamt i useEffect istället
+  return (await res.json()) as Partial<Profile>;
 }
 
-// === Hjälpare (utan any) ===
-function toArrayFromCSV(v: string): string[] {
-  return v
-    .split(",")
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
-}
-function toCSV(arr: string[] | undefined | null): string {
-  return (arr ?? []).join(", ");
-}
-function arrOfStrings(v: unknown): string[] {
-  if (!Array.isArray(v)) return [];
-  return v.filter((x): x is string => typeof x === "string");
-}
-function pickArray(obj: unknown, key: "favoriteGenres" | "dislikedGenres" | "providers"): string[] {
-  if (obj && typeof obj === "object" && key in obj) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const val = (obj as Record<string, unknown>)[key];
-    return arrOfStrings(val);
-  }
-  return [];
-}
-
-// Vanliga förval
-const REGION_OPTS = ["SE", "NO", "DK", "FI", "GB", "US", "DE", "FR", "ES", "IT", "NL"];
-const LOCALE_OPTS = ["sv-SE", "en-GB", "en-US", "no-NO", "da-DK", "fi-FI", "de-DE", "fr-FR", "es-ES", "it-IT", "nl-NL"];
-
-export default function ProfileClient({ initial }: Props) {
-  const [mode, setMode] = useState<"view" | "edit">("view");
-
-  const [form, setForm] = useState({
-    displayName: initial?.displayName ?? "",
-    dob: initial?.dob ?? "",
-    region: initial?.region ?? "SE",
-    locale: initial?.locale ?? "sv-SE",
-    uiLanguage: initial?.uiLanguage ?? "sv",
-
-    favoriteGenresCSV: toCSV(pickArray(initial, "favoriteGenres")),
-    dislikedGenresCSV: toCSV(pickArray(initial, "dislikedGenres")),
-    providersCSV: toCSV(pickArray(initial, "providers")),
+async function saveProfile(p: Profile): Promise<SaveResp> {
+  const res = await fetch('/api/profile/save-onboarding', {
+    method: 'POST',
+    body: JSON.stringify({
+      displayName: p.displayName,
+      dob: p.dob,
+      favoriteGenres: p.favoriteGenres,
+      dislikedGenres: p.dislikedGenres,
+      providers: p.providers,
+      uiLanguage: p.uiLanguage,
+      // ⚠️ Region & Locale skickas inte – tas från cookies/IP på servern
+    }),
+    headers: { 'Content-Type': 'application/json' },
   });
+  return (await res.json()) as SaveResp;
+}
 
-  const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
+export default function ProfileClient({ initial }: { initial?: InitialProfile }) {
+  // Normalisera null/undefined till säkra standardvärden
+  const [p, setP] = useState<Profile>(() => ({
+    displayName: initial?.displayName ?? '',
+    dob: initial?.dob ?? '',
+    favoriteGenres: Array.isArray(initial?.favoriteGenres) ? initial!.favoriteGenres! : [],
+    dislikedGenres: Array.isArray(initial?.dislikedGenres) ? initial!.dislikedGenres! : [],
+    providers: Array.isArray(initial?.providers) ? initial!.providers! : [],
+    uiLanguage: initial?.uiLanguage ?? 'sv',
+  }));
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
 
+  // Hämta färsk profil (om du vill låta serversidan sätta mer/andra fält)
   useEffect(() => {
-    setForm({
-      displayName: initial?.displayName ?? "",
-      dob: initial?.dob ?? "",
-      region: initial?.region ?? "SE",
-      locale: initial?.locale ?? "sv-SE",
-      uiLanguage: initial?.uiLanguage ?? "sv",
-      favoriteGenresCSV: toCSV(pickArray(initial, "favoriteGenres")),
-      dislikedGenresCSV: toCSV(pickArray(initial, "dislikedGenres")),
-      providersCSV: toCSV(pickArray(initial, "providers")),
+    (async () => {
+      try {
+        const data = await loadProfile();
+        setP((old) => ({
+          displayName: (data.displayName ?? old.displayName) ?? '',
+          dob: (data.dob ?? old.dob) ?? '',
+          favoriteGenres: Array.isArray(data.favoriteGenres) ? data.favoriteGenres : old.favoriteGenres,
+          dislikedGenres: Array.isArray(data.dislikedGenres) ? data.dislikedGenres : old.dislikedGenres,
+          providers: Array.isArray(data.providers) ? data.providers : old.providers,
+          uiLanguage: (data.uiLanguage ?? old.uiLanguage) ?? 'sv',
+        }));
+      } catch {
+        // noop – vi behåller initialt värde
+      }
+    })();
+  }, []);
+
+  const toggle = (key: 'favoriteGenres' | 'dislikedGenres' | 'providers', value: string) => {
+    setP((old) => {
+      const has = old[key].includes(value);
+      const next = has ? old[key].filter((v) => v !== value) : [...old[key], value];
+      return { ...old, [key]: next };
     });
-  }, [initial]);
+  };
 
-  const canSave = useMemo(() => {
-    return Boolean(form.displayName && form.region && form.locale && form.uiLanguage);
-  }, [form]);
-
-  function useDeviceLocale() {
-    const lang = typeof navigator !== "undefined" ? navigator.language : "";
-    if (!lang) return;
-    const ui = lang.split("-")[0] || "sv";
-    const region = lang.includes("-") ? lang.split("-")[1].toUpperCase() : "SE";
-    setForm((s) => ({ ...s, locale: lang, uiLanguage: ui, region }));
-  }
-
-  async function onSubmit(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault();
-    setSaving(true);
-    setMessage(null);
+  const submit = async () => {
+    setBusy(true);
+    setMsg(null);
     try {
-      const payload = {
-        displayName: form.displayName.trim(),
-        dob: form.dob || null,
-        region: form.region,
-        locale: form.locale,
-        uiLanguage: form.uiLanguage,
-        favoriteGenres: toArrayFromCSV(form.favoriteGenresCSV),
-        dislikedGenres: toArrayFromCSV(form.dislikedGenresCSV),
-        providers: toArrayFromCSV(form.providersCSV),
-      };
-
-      const res = await fetch("/api/profile", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        cache: "no-store",
-        body: JSON.stringify(payload),
-      });
-      const data = (await res.json()) as { ok: boolean; message?: string };
-      if (!res.ok || !data.ok) throw new Error(data.message || "Kunde inte spara profilen.");
-
-      setMessage("Sparat!");
-      setMode("view");
-    } catch (err: unknown) {
-      setMessage(getErrorMessage(err));
+      const result = await saveProfile(p);
+      setMsg(result.ok ? 'Profil uppdaterad!' : (result.message ?? 'Ett fel uppstod.'));
+    } catch {
+      setMsg('Ett fel uppstod.');
     } finally {
-      setSaving(false);
+      setBusy(false);
     }
-  }
-
-  if (mode === "view") {
-    return (
-      <div className="space-y-4">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <SummaryItem label="Visningsnamn" value={form.displayName || "—"} />
-          <SummaryItem label="Födelsedatum" value={form.dob || "—"} />
-          <SummaryItem label="Region" value={form.region || "—"} />
-          <SummaryItem label="Locale" value={form.locale || "—"} />
-          <SummaryItem label="UI-språk" value={form.uiLanguage || "—"} />
-          <SummaryItem label="Favoritgenrer" value={form.favoriteGenresCSV || "—"} />
-          <SummaryItem label="Ogillar" value={form.dislikedGenresCSV || "—"} />
-          <SummaryItem label="Tjänster" value={form.providersCSV || "—"} />
-        </div>
-
-        <div className="flex items-center gap-3">
-          <button type="button" onClick={() => setMode("edit")} className="rounded bg-black text-white px-4 py-2">
-            Redigera
-          </button>
-          {message && <span className="text-sm">{message}</span>}
-        </div>
-      </div>
-    );
-  }
+  };
 
   return (
-    <form onSubmit={onSubmit} className="grid grid-cols-1 md:grid-cols-2 gap-4">
-      {/* Basic */}
-      <div className="space-y-2">
-        <label className="block text-sm font-medium">Visningsnamn</label>
-        <input
-          className="w-full rounded border px-3 py-2"
-          value={form.displayName}
-          onChange={(e) => setForm((s) => ({ ...s, displayName: e.target.value }))}
-          placeholder="Ditt namn"
-        />
-      </div>
+    <main className="mx-auto max-w-3xl px-4 py-6">
+      <h1 className="mb-6 text-2xl font-bold">Profil</h1>
 
-      <div className="space-y-2">
-        <label className="block text-sm font-medium">Födelsedatum</label>
+      {/* Kort / sektioner i onboarding-stil */}
+      <section className="mb-5 rounded-2xl bg-neutral-900 p-5">
+        <h2 className="mb-3 text-lg font-semibold">Ditt namn</h2>
+        <input
+          type="text"
+          value={p.displayName}
+          onChange={(e) => setP({ ...p, displayName: e.target.value })}
+          className="w-full rounded-xl border border-neutral-700 bg-neutral-800 px-3 py-2 text-neutral-100 outline-none focus:ring-2 focus:ring-violet-600"
+          placeholder="Visningsnamn"
+        />
+      </section>
+
+      <section className="mb-5 rounded-2xl bg-neutral-900 p-5">
+        <h2 className="mb-3 text-lg font-semibold">Födelsedatum</h2>
         <input
           type="date"
-          className="w-full rounded border px-3 py-2"
-          value={form.dob}
-          onChange={(e) => setForm((s) => ({ ...s, dob: e.target.value }))}
+          value={p.dob ?? ''}
+          onChange={(e) => setP({ ...p, dob: e.target.value })}
+          className="w-full rounded-xl border border-neutral-700 bg-neutral-800 px-3 py-2 text-neutral-100 outline-none focus:ring-2 focus:ring-violet-600"
         />
-      </div>
+        <p className="mt-2 text-xs text-neutral-400">Format: ÅÅÅÅ-MM-DD</p>
+      </section>
 
-      {/* Region/Locale/UI */}
-      <div className="space-y-2">
-        <label className="block text-sm font-medium">Region</label>
-        <select
-          className="w-full rounded border px-3 py-2 bg-black"
-          value={form.region}
-          onChange={(e) => setForm((s) => ({ ...s, region: e.target.value.toUpperCase() }))}
-        >
-          {[form.region, ...REGION_OPTS.filter((r) => r !== form.region)].map((r) => (
-            <option key={r} value={r}>
-              {r}
-            </option>
-          ))}
-        </select>
-      </div>
+      <section className="mb-5 rounded-2xl bg-neutral-900 p-5">
+        <h2 className="mb-3 text-lg font-semibold">Favoritgenrer</h2>
+        <div className="flex flex-wrap gap-2">
+          {ALL_GENRES.map((g) => {
+            const active = p.favoriteGenres.includes(g);
+            return (
+              <button
+                key={g}
+                onClick={() => toggle('favoriteGenres', g)}
+                className={`rounded-full px-3 py-1 text-sm transition
+                  ${active ? 'bg-violet-600 text-white' : 'bg-neutral-800 text-neutral-200 hover:bg-neutral-700'}
+                `}
+              >
+                {g}
+              </button>
+            );
+          })}
+        </div>
+      </section>
 
-      <div className="space-y-2">
-        <label className="block text-sm font-medium">Locale</label>
-        <select
-          className="w-full rounded border px-3 py-2 bg:black"
-          value={form.locale}
-          onChange={(e) => setForm((s) => ({ ...s, locale: e.target.value }))}
-        >
-          {[form.locale, ...LOCALE_OPTS.filter((l) => l !== form.locale)].map((l) => (
-            <option key={l} value={l}>
-              {l}
-            </option>
-          ))}
-        </select>
-      </div>
+      <section className="mb-5 rounded-2xl bg-neutral-900 p-5">
+        <h2 className="mb-3 text-lg font-semibold">Undvik genrer</h2>
+        <div className="flex flex-wrap gap-2">
+          {ALL_GENRES.map((g) => {
+            const active = p.dislikedGenres.includes(g);
+            return (
+              <button
+                key={g}
+                onClick={() => toggle('dislikedGenres', g)}
+                className={`rounded-full px-3 py-1 text-sm transition
+                  ${active ? 'bg-rose-600 text-white' : 'bg-neutral-800 text-neutral-200 hover:bg-neutral-700'}
+                `}
+              >
+                {g}
+              </button>
+            );
+          })}
+        </div>
+      </section>
 
-      <div className="space-y-2 md:col-span-2">
-        <label className="block text-sm font-medium">UI-språk</label>
-        <input
-          className="w-full rounded border px-3 py-2"
-          value={form.uiLanguage}
-          onChange={(e) => setForm((s) => ({ ...s, uiLanguage: e.target.value }))}
-          placeholder="sv"
-        />
+      <section className="mb-5 rounded-2xl bg-neutral-900 p-5">
+        <h2 className="mb-3 text-lg font-semibold">Tjänster du har</h2>
+        <div className="flex flex-wrap gap-2">
+          {ALL_PROVIDERS.map((v) => {
+            const active = p.providers.includes(v);
+            return (
+              <button
+                key={v}
+                onClick={() => toggle('providers', v)}
+                className={`rounded-full px-3 py-1 text-sm transition
+                  ${active ? 'bg-emerald-600 text-white' : 'bg-neutral-800 text-neutral-200 hover:bg-neutral-700'}
+                `}
+              >
+                {v}
+              </button>
+            );
+          })}
+        </div>
+      </section>
+
+      <section className="mb-6 rounded-2xl bg-neutral-900 p-5">
+        <h2 className="mb-3 text-lg font-semibold">UI-språk</h2>
+        <div className="flex flex-wrap gap-2">
+          {ALL_LANGS.map((lang) => {
+            const active = p.uiLanguage === lang.code;
+            return (
+              <button
+                key={lang.code}
+                onClick={() => setP({ ...p, uiLanguage: lang.code })}
+                className={`rounded-full px-3 py-1 text-sm transition
+                  ${active ? 'bg-violet-600 text-white' : 'bg-neutral-800 text-neutral-200 hover:bg-neutral-700'}
+                `}
+                aria-pressed={active}
+              >
+                {lang.label}
+              </button>
+            );
+          })}
+        </div>
+        <p className="mt-2 text-xs text-neutral-400">
+          Region & Locale sätts automatiskt (cookies/IP) och visas inte här.
+        </p>
+      </section>
+
+      <div className="flex items-center gap-3">
         <button
-          type="button"
-          onClick={useDeviceLocale}
-          className="mt-2 rounded border px-3 py-1 text-sm"
-          title="Hämta baserat på din enhet"
+          onClick={submit}
+          disabled={busy}
+          className="rounded-xl bg-violet-600 px-4 py-2 text-white transition hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-60"
         >
-          Hämta från enhet
+          Spara ändringar
         </button>
+        {msg && <p className="text-sm text-neutral-300">{msg}</p>}
       </div>
-
-      {/* Preferenser */}
-      <div className="space-y-2 md:col-span-2">
-        <label className="block text-sm font-medium">Favoritgenrer (komma-separerat)</label>
-        <input
-          className="w-full rounded border px-3 py-2"
-          value={form.favoriteGenresCSV}
-          onChange={(e) => setForm((s) => ({ ...s, favoriteGenresCSV: e.target.value }))}
-          placeholder="Action, Komedi, Drama"
-        />
-      </div>
-
-      <div className="space-y-2 md:col-span-2">
-        <label className="block text-sm font-medium">Ogillar (komma-separerat)</label>
-        <input
-          className="w-full rounded border px-3 py-2"
-          value={form.dislikedGenresCSV}
-          onChange={(e) => setForm((s) => ({ ...s, dislikedGenresCSV: e.target.value }))}
-          placeholder="Skräck, Western"
-        />
-      </div>
-
-      <div className="space-y-2 md:col-span-2">
-        <label className="block text-sm font-medium">Tjänster / Providers (komma-separerat)</label>
-        <input
-          className="w-full rounded border px-3 py-2"
-          value={form.providersCSV}
-          onChange={(e) => setForm((s) => ({ ...s, providersCSV: e.target.value }))}
-          placeholder="Netflix, Viaplay, HBO Max"
-        />
-      </div>
-
-      <div className="md:col-span-2 flex items-center gap-3">
-        <button type="submit" disabled={!canSave || saving} className="rounded bg-black text-white px-4 py-2 disabled:opacity-50">
-          {saving ? "Sparar..." : "Spara"}
-        </button>
-        <button type="button" onClick={() => setMode("view")} className="rounded border px-4 py-2">
-          Avbryt
-        </button>
-        {message && <span className="text-sm">{message}</span>}
-      </div>
-    </form>
-  );
-}
-
-function SummaryItem({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded border px-3 py-2">
-      <div className="text-xs opacity-70">{label}</div>
-      <div className="text-base">{value}</div>
-    </div>
+    </main>
   );
 }
