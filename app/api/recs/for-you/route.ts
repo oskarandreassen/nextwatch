@@ -15,7 +15,12 @@ type Movie = {
   first_air_date?: string | null;
 };
 
-type Paged<T> = { page: number; results: T[]; total_pages: number; total_results: number };
+type Paged<T> = {
+  page: number;
+  results: T[];
+  total_pages: number;
+  total_results: number;
+};
 
 type Card = {
   id: string;
@@ -26,7 +31,7 @@ type Card = {
   poster: string | null;
 };
 
-// Svenska → TMDB ids (du kan utöka listan när du vill)
+// Svenska → TMDB ids (utökad med synonymer)
 const SWEDISH_TO_TMDB: Record<string, number> = {
   Action: 28,
   Äventyr: 12,
@@ -42,6 +47,10 @@ const SWEDISH_TO_TMDB: Record<string, number> = {
   Musik: 10402,
   Mysterium: 9648,
   Romantik: 10749,
+  // Vanligt är "Science fiction" (sv), men ibland har man "Sci-Fi"/"Sci fi"/"Science"
+  "Science fiction": 878,
+  "Sci-Fi": 878,
+  "Sci fi": 878,
   Science: 878,
   Thriller: 53,
   Krig: 10752,
@@ -51,11 +60,12 @@ const SWEDISH_TO_TMDB: Record<string, number> = {
 const READ_TOKEN = process.env.TMDB_READ_TOKEN ?? process.env.TMDB_TOKEN;
 
 export async function GET(req: NextRequest) {
-  const debug = new URL(req.url).searchParams.get("debug") === "1";
+  const { searchParams } = new URL(req.url);
+  const debug = searchParams.get("debug") === "1";
 
   if (!READ_TOKEN) {
     return NextResponse.json(
-      { items: [], nextCursor: null, note: "TMDB_READ_TOKEN saknas (eller TMDB_TOKEN)" },
+      { ok: false, items: [], nextCursor: null, message: "TMDB_READ_TOKEN saknas (eller TMDB_TOKEN)" },
       { status: 200 }
     );
   }
@@ -63,10 +73,12 @@ export async function GET(req: NextRequest) {
   const jar = await cookies();
   const uid = jar.get("nw_uid")?.value ?? null;
   if (!uid) {
-    return NextResponse.json({ items: [], nextCursor: null, note: "Ingen nw_uid" }, { status: 200 });
+    return NextResponse.json(
+      { ok: false, items: [], nextCursor: null, message: "Ingen nw_uid (inte inloggad/session saknas)" },
+      { status: 200 }
+    );
   }
 
-  const { searchParams } = new URL(req.url);
   const cursor = searchParams.get("cursor");
   const pageNum = cursor ? Number(cursor) : 1;
 
@@ -86,9 +98,9 @@ export async function GET(req: NextRequest) {
     : trending({ page: pageNum }));
 
   if (debug) {
-    return NextResponse.json({ ...result, _debug: { wanted, pageNum } });
+    return NextResponse.json({ ok: true, ...result, _debug: { wanted, pageNum } });
   }
-  return NextResponse.json(result);
+  return NextResponse.json({ ok: true, ...result });
 }
 
 /* ---- TMDB helpers ---- */
@@ -109,7 +121,7 @@ function normalize(x: Movie, mediaType: "movie" | "tv"): Card {
   const date = mediaType === "movie" ? x.release_date : x.first_air_date;
   const year = date && date.length >= 4 ? date.slice(0, 4) : null;
   return {
-    id: `${mediaType}-${x.id}`,
+    id: `${mediaType}_${x.id}`,
     tmdbId: x.id,
     mediaType,
     title,
@@ -121,19 +133,22 @@ function normalize(x: Movie, mediaType: "movie" | "tv"): Card {
 async function discover({ genres, page }: { genres: number[]; page: number }) {
   const [movie, tv] = await Promise.all([
     tmdbGet<Paged<Movie>>("discover/movie", {
-      sort_by: "popularity.desc",
+      page,
       with_genres: genres.join(","),
       include_adult: false,
-      page,
+      sort_by: "popularity.desc",
+      "vote_count.gte": 10,
     }),
     tmdbGet<Paged<Movie>>("discover/tv", {
-      sort_by: "popularity.desc",
+      page,
       with_genres: genres.join(","),
       include_adult: false,
-      page,
+      sort_by: "popularity.desc",
+      "vote_count.gte": 10,
     }),
   ]);
 
+  // Blanda film/serie
   const mixed: Card[] = [];
   const max = Math.max(movie.results.length, tv.results.length);
   for (let i = 0; i < max; i++) {
@@ -144,7 +159,7 @@ async function discover({ genres, page }: { genres: number[]; page: number }) {
   const items = mixed.slice(0, 100);
   const hasMore = page + 1 <= Math.max(movie.total_pages, tv.total_pages);
 
-  // Fallback om det råkar bli tomt (konstiga genre-kombinationer o.s.v.)
+  // Om discover gav tomt (ovanligt), fall tillbaka till trending
   if (items.length === 0) {
     return trending({ page });
   }
