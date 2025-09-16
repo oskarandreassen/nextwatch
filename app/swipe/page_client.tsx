@@ -6,7 +6,7 @@ import { motion, useAnimation } from "framer-motion";
 type MediaType = "movie" | "tv";
 
 export type Card = {
-  id: string;
+  id: string;                 // ex: "movie_123"
   tmdbId: number;
   mediaType: MediaType;
   title: string;
@@ -23,14 +23,17 @@ type ApiRes = {
   message?: string;
 };
 
-const HIDE_KEY = "nw_disliked_until";
+/* ---------------- Local persistence (hide/seen) ---------------- */
+
+const HIDE_KEY = "nw_disliked_until"; // { [tmdbId]: epoch_ms_until }
+const SEEN_KEY = "nw_seen_ids";       // string[] av card.id
 
 function readHideMap(): Record<string, number> {
   try {
     const raw = localStorage.getItem(HIDE_KEY);
     if (!raw) return {};
-    const obj = JSON.parse(raw) as Record<string, number>;
-    return obj && typeof obj === "object" ? obj : {};
+    const obj = JSON.parse(raw) as unknown;
+    return obj && typeof obj === "object" ? (obj as Record<string, number>) : {};
   } catch {
     return {};
   }
@@ -49,6 +52,31 @@ function hideFor7Days(tmdbId: number) {
   map[String(tmdbId)] = Date.now() + sevenDays;
   writeHideMap(map);
 }
+
+function readSeen(): Set<string> {
+  try {
+    const raw = localStorage.getItem(SEEN_KEY);
+    if (!raw) return new Set();
+    const arr = JSON.parse(raw) as unknown;
+    if (!Array.isArray(arr)) return new Set();
+    return new Set(arr.filter((x): x is string => typeof x === "string"));
+  } catch {
+    return new Set();
+  }
+}
+function writeSeen(seen: Set<string>) {
+  localStorage.setItem(SEEN_KEY, JSON.stringify(Array.from(seen)));
+}
+function isSeen(id: string): boolean {
+  return readSeen().has(id);
+}
+function markSeen(id: string) {
+  const s = readSeen();
+  s.add(id);
+  writeSeen(s);
+}
+
+/* ---------------- Component ---------------- */
 
 export default function SwipePageClient() {
   const [cards, setCards] = useState<Card[]>([]);
@@ -72,7 +100,9 @@ export default function SwipePageClient() {
         const res = await fetch(url.toString(), { cache: "no-store" });
         const data = (await res.json()) as ApiRes;
         if (data.ok && data.items) {
-          const filtered = data.items.filter((c) => !isHidden(c.tmdbId));
+          const filtered = data.items
+            .filter((c) => !isHidden(c.tmdbId))
+            .filter((c) => !isSeen(c.id));
           setCards((prev) => (initial ? filtered : [...prev, ...filtered]));
           setCursor(data.nextCursor ?? null);
         }
@@ -83,10 +113,12 @@ export default function SwipePageClient() {
     [cursor, loading]
   );
 
+  // Första laddningen
   useEffect(() => {
     void loadMore(true);
   }, [loadMore]);
 
+  // Autoladda när det börjar ta slut
   useEffect(() => {
     if (!loading && cards.length < 3 && hasMore) {
       void loadMore(false);
@@ -99,11 +131,13 @@ export default function SwipePageClient() {
   }
 
   async function handleDislike(c: Card) {
+    markSeen(c.id);
     hideFor7Days(c.tmdbId);
     popTop();
   }
 
   async function handleLike(c: Card) {
+    markSeen(c.id);
     try {
       const res = await fetch("/api/watchlist/like", {
         method: "POST",
@@ -132,9 +166,9 @@ export default function SwipePageClient() {
     setFlippedId((prev) => (prev === c.id ? null : c.id));
   }
 
-  // Thresholds: funkar bättre på mobil (vi accepterar antingen lång sträcka eller hög velocity)
-  const DIST_THRESHOLD = 110;         // px
-  const VELOCITY_THRESHOLD = 700;     // px/s ungefär
+  // Mobilvänliga thresholds: trigga på avstånd ELLER hastighet
+  const DIST_THRESHOLD = 110;     // px
+  const VELOCITY_THRESHOLD = 700; // px/s ungefär
 
   return (
     <div className="relative mx-auto w-full max-w-md" style={{ minHeight: 620 }}>
@@ -145,7 +179,7 @@ export default function SwipePageClient() {
         </div>
       )}
 
-      {/* ENDAST TOPPKORTET RENDERAS */}
+      {/* ENDAST TOPPKORT RENDERAS */}
       {topCard ? (
         <motion.div
           key={topCard.id}
@@ -158,25 +192,27 @@ export default function SwipePageClient() {
             const { x } = info.offset;
             const v = info.velocity.x;
 
-            // Swipe RIGHT (like)
+            // Right = like
             if (x > DIST_THRESHOLD || v > VELOCITY_THRESHOLD) {
-              void controls.start({ x: 520, rotate: 18, opacity: 0, transition: { duration: 0.22 } }).then(() => {
-                void handleLike(topCard);
-                void controls.start({ x: 0, rotate: 0, opacity: 1 });
-              });
+              void controls
+                .start({ x: 520, rotate: 18, opacity: 0, transition: { duration: 0.22 } })
+                .then(() => {
+                  void handleLike(topCard);
+                  void controls.start({ x: 0, rotate: 0, opacity: 1 });
+                });
               return;
             }
-
-            // Swipe LEFT (dislike)
+            // Left = dislike
             if (x < -DIST_THRESHOLD || v < -VELOCITY_THRESHOLD) {
-              void controls.start({ x: -520, rotate: -18, opacity: 0, transition: { duration: 0.22 } }).then(() => {
-                void handleDislike(topCard);
-                void controls.start({ x: 0, rotate: 0, opacity: 1 });
-              });
+              void controls
+                .start({ x: -520, rotate: -18, opacity: 0, transition: { duration: 0.22 } })
+                .then(() => {
+                  void handleDislike(topCard);
+                  void controls.start({ x: 0, rotate: 0, opacity: 1 });
+                });
               return;
             }
-
-            // snap back
+            // Snap back
             void controls.start({ x: 0, rotate: 0, transition: { type: "spring", stiffness: 320, damping: 28 } });
           }}
         >
@@ -192,11 +228,18 @@ export default function SwipePageClient() {
         </div>
       )}
 
-      {/* FOOTER-KNAPPAR – längre under, större, tydligare */}
+      {/* FOOTER-KNAPPAR – längre under, större, tydligare + exit-animationer */}
       <div className="pointer-events-auto absolute inset-x-0 bottom-6 z-20 flex items-center justify-center gap-8">
         <button
           aria-label="Nej"
-          onClick={() => topCard && void handleDislike(topCard)}
+          onClick={() =>
+            topCard &&
+            (async () => {
+              await controls.start({ x: -520, rotate: -18, opacity: 0, transition: { duration: 0.22 } });
+              await handleDislike(topCard);
+              await controls.start({ x: 0, rotate: 0, opacity: 1 });
+            })()
+          }
           className="h-16 w-16 rounded-full bg-red-500/15 text-red-400 ring-2 ring-red-400/40 backdrop-blur hover:bg-red-500/25 transition"
           title="Nej"
         >
@@ -214,7 +257,14 @@ export default function SwipePageClient() {
 
         <button
           aria-label="Gilla"
-          onClick={() => topCard && void handleLike(topCard)}
+          onClick={() =>
+            topCard &&
+            (async () => {
+              await controls.start({ x: 520, rotate: 18, opacity: 0, transition: { duration: 0.22 } });
+              await handleLike(topCard);
+              await controls.start({ x: 0, rotate: 0, opacity: 1 });
+            })()
+          }
           className="h-16 w-16 rounded-full bg-emerald-500/15 text-emerald-400 ring-2 ring-emerald-400/40 backdrop-blur hover:bg-emerald-500/25 transition"
           title="Gilla"
         >
@@ -225,23 +275,28 @@ export default function SwipePageClient() {
   );
 }
 
-/* ============ Kort (utan knappar i overlay) ============ */
+/* ---------------- Card components ---------------- */
 
-function StaticCard({ card, flipped, onFlip }: { card: Card; flipped: boolean; onFlip: () => void }) {
+function StaticCard({
+  card,
+  flipped,
+  onFlip,
+}: {
+  card: Card;
+  flipped: boolean;
+  onFlip: () => void;
+}) {
   return (
-    <div
-      className="relative h-[520px] w-[360px] cursor-pointer [perspective:1000px]"
-      onClick={onFlip}
-    >
+    <div className="relative h-[520px] w-[360px] cursor-pointer [perspective:1000px]" onClick={onFlip}>
       <div
         className="relative h-full w-full rounded-2xl border border-white/15 bg-black shadow-xl transition-transform duration-300 [transform-style:preserve-3d]"
         style={{ transform: flipped ? "rotateY(180deg)" : "rotateY(0deg)" }}
       >
-        {/* FRONT */}
+        {/* Front */}
         <div className="absolute inset-0 [backface-visibility:hidden]">
           <Front card={card} />
         </div>
-        {/* BACK */}
+        {/* Back */}
         <div className="absolute inset-0 rotate-y-180 [backface-visibility:hidden] [transform:rotateY(180deg)]">
           <Back card={card} />
         </div>
