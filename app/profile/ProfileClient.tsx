@@ -12,6 +12,9 @@ function getErrorMessage(err: unknown): string {
 }
 
 export default function ProfileClient({ initial }: Props) {
+  // Visa som lista (view) som standard – likt onboardingens sammanfattning.
+  const [mode, setMode] = useState<"view" | "edit">("view");
+
   const [form, setForm] = useState({
     displayName: initial?.displayName ?? "",
     dob: initial?.dob ?? "",
@@ -54,12 +57,12 @@ export default function ProfileClient({ initial }: Props) {
           uiLanguage: form.uiLanguage,
         }),
       });
-
       const data = (await res.json()) as { ok: boolean; message?: string };
       if (!res.ok || !data.ok) {
         throw new Error(data.message || "Kunde inte spara profilen.");
       }
       setMessage("Sparat!");
+      setMode("view");
     } catch (err: unknown) {
       setMessage(getErrorMessage(err));
     } finally {
@@ -67,6 +70,33 @@ export default function ProfileClient({ initial }: Props) {
     }
   }
 
+  // ===== VIEW (sammanfattning likt onboarding) =====
+  if (mode === "view") {
+    return (
+      <div className="space-y-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <SummaryItem label="Visningsnamn" value={form.displayName || "—"} />
+          <SummaryItem label="Födelsedatum" value={form.dob || "—"} />
+          <SummaryItem label="Region" value={form.region || "—"} />
+          <SummaryItem label="Locale" value={form.locale || "—"} />
+          <SummaryItem label="UI-språk" value={form.uiLanguage || "—"} />
+        </div>
+
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setMode("edit")}
+            className="rounded bg-black text-white px-4 py-2"
+          >
+            Redigera
+          </button>
+          {message && <span className="text-sm">{message}</span>}
+        </div>
+      </div>
+    );
+  }
+
+  // ===== EDIT (ditt befintliga formulär) =====
   return (
     <form onSubmit={onSubmit} className="grid grid-cols-1 md:grid-cols-2 gap-4">
       <div className="space-y-2">
@@ -127,8 +157,24 @@ export default function ProfileClient({ initial }: Props) {
         >
           {saving ? "Sparar..." : "Spara"}
         </button>
+        <button
+          type="button"
+          onClick={() => setMode("view")}
+          className="rounded border px-4 py-2"
+        >
+          Avbryt
+        </button>
         {message && <span className="text-sm">{message}</span>}
       </div>
     </form>
+  );
+}
+
+function SummaryItem({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded border px-3 py-2">
+      <div className="text-xs opacity-70">{label}</div>
+      <div className="text-base">{value}</div>
+    </div>
   );
 }

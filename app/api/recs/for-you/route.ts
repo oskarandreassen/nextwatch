@@ -31,7 +31,7 @@ type Card = {
   poster: string | null;
 };
 
-// Svenska → TMDB ids (utökad med synonymer)
+// 🇸🇪→TMDB id (med vanliga synonymer)
 const SWEDISH_TO_TMDB: Record<string, number> = {
   Action: 28,
   Äventyr: 12,
@@ -47,7 +47,6 @@ const SWEDISH_TO_TMDB: Record<string, number> = {
   Musik: 10402,
   Mysterium: 9648,
   Romantik: 10749,
-  // Vanligt är "Science fiction" (sv), men ibland har man "Sci-Fi"/"Sci fi"/"Science"
   "Science fiction": 878,
   "Sci-Fi": 878,
   "Sci fi": 878,
@@ -57,62 +56,87 @@ const SWEDISH_TO_TMDB: Record<string, number> = {
   Western: 37,
 };
 
-const READ_TOKEN = process.env.TMDB_READ_TOKEN ?? process.env.TMDB_TOKEN;
+/** ---- TMDB credentials (stöd flera namn) ----
+ * v4 (Bearer):  TMDB_v4_TOKEN | TMDB_READ_TOKEN | TMDB_TOKEN
+ * v3 (api_key): TMDB_API_KEY
+ */
+const V4_TOKEN =
+  process.env.TMDB_v4_TOKEN ??
+  process.env.TMDB_READ_TOKEN ??
+  process.env.TMDB_TOKEN ??
+  null;
+
+const V3_KEY = process.env.TMDB_API_KEY ?? null;
 
 export async function GET(req: NextRequest) {
-  const { searchParams } = new URL(req.url);
-  const debug = searchParams.get("debug") === "1";
+  const url = new URL(req.url);
+  const debug = url.searchParams.get("debug") === "1";
+  const pageNum = Number(url.searchParams.get("cursor") ?? "1");
 
-  if (!READ_TOKEN) {
-    return NextResponse.json(
-      { ok: false, items: [], nextCursor: null, message: "TMDB_READ_TOKEN saknas (eller TMDB_TOKEN)" },
-      { status: 200 }
-    );
-  }
-
+  // session
   const jar = await cookies();
   const uid = jar.get("nw_uid")?.value ?? null;
   if (!uid) {
     return NextResponse.json(
-      { ok: false, items: [], nextCursor: null, message: "Ingen nw_uid (inte inloggad/session saknas)" },
+      { ok: false, items: [], nextCursor: null, message: "Ingen session (nw_uid saknas)" },
       { status: 200 }
     );
   }
 
-  const cursor = searchParams.get("cursor");
-  const pageNum = cursor ? Number(cursor) : 1;
+  // creds check
+  if (!V4_TOKEN && !V3_KEY) {
+    return NextResponse.json(
+      {
+        ok: false,
+        items: [],
+        nextCursor: null,
+        message: "TMDB_v4_TOKEN (v4) eller TMDB_API_KEY (v3) saknas",
+        _debug: debug ? { hasV4: !!V4_TOKEN, hasV3: !!V3_KEY } : undefined,
+      },
+      { status: 200 }
+    );
+  }
 
+  // profil
   const prof = await prisma.profile.findUnique({
     where: { userId: uid },
-    select: { favoriteGenres: true, region: true },
+    select: { favoriteGenres: true },
   });
 
-  // Mappa svenska genrer -> ids
   const wanted = (prof?.favoriteGenres ?? [])
     .map((g) => SWEDISH_TO_TMDB[g])
     .filter((n): n is number => Number.isFinite(n));
 
-  // Hämta discover (om vi har genrer), annars trending
-  const result = await (wanted.length > 0
-    ? discover({ genres: wanted, page: pageNum })
-    : trending({ page: pageNum }));
+  const result =
+    wanted.length > 0
+      ? await discover({ genres: wanted, page: pageNum })
+      : await trending({ page: pageNum });
 
-  if (debug) {
-    return NextResponse.json({ ok: true, ...result, _debug: { wanted, pageNum } });
-  }
-  return NextResponse.json({ ok: true, ...result });
+  const payload = debug ? { ok: true, ...result, _debug: { wanted, pageNum } } : { ok: true, ...result };
+  return NextResponse.json(payload, { status: 200 });
 }
 
-/* ---- TMDB helpers ---- */
+/* ---------------- TMDB helpers ---------------- */
 
-async function tmdbGet<T>(path: string, params: Record<string, string | number | boolean>) {
+async function tmdbGet<T>(
+  path: string,
+  params: Record<string, string | number | boolean>
+): Promise<T> {
   const url = new URL(`https://api.themoviedb.org/3/${path}`);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, String(v));
-  const res = await fetch(url.toString(), {
-    headers: { Authorization: `Bearer ${READ_TOKEN}`, "Content-Type": "application/json" },
-    cache: "no-store",
-  });
-  if (!res.ok) throw new Error(`TMDB ${res.status} on ${path}`);
+
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+
+  if (V4_TOKEN) {
+    headers.Authorization = `Bearer ${V4_TOKEN}`; // v4
+  } else if (V3_KEY) {
+    url.searchParams.set("api_key", V3_KEY); // v3
+  }
+
+  const res = await fetch(url.toString(), { headers, cache: "no-store" });
+  if (!res.ok) {
+    throw new Error(`TMDB ${res.status} on ${path}`);
+  }
   return (await res.json()) as T;
 }
 
@@ -148,7 +172,6 @@ async function discover({ genres, page }: { genres: number[]; page: number }) {
     }),
   ]);
 
-  // Blanda film/serie
   const mixed: Card[] = [];
   const max = Math.max(movie.results.length, tv.results.length);
   for (let i = 0; i < max; i++) {
@@ -159,7 +182,6 @@ async function discover({ genres, page }: { genres: number[]; page: number }) {
   const items = mixed.slice(0, 100);
   const hasMore = page + 1 <= Math.max(movie.total_pages, tv.total_pages);
 
-  // Om discover gav tomt (ovanligt), fall tillbaka till trending
   if (items.length === 0) {
     return trending({ page });
   }
@@ -171,12 +193,14 @@ async function trending({ page }: { page: number }) {
     tmdbGet<Paged<Movie>>("trending/movie/week", { page }),
     tmdbGet<Paged<Movie>>("trending/tv/week", { page }),
   ]);
+
   const mixed: Card[] = [];
   const max = Math.max(movie.results.length, tv.results.length);
   for (let i = 0; i < max; i++) {
     if (movie.results[i]) mixed.push(normalize(movie.results[i], "movie"));
     if (tv.results[i]) mixed.push(normalize(tv.results[i], "tv"));
   }
+
   const items = mixed.slice(0, 100);
   const hasMore = page + 1 <= Math.max(movie.total_pages, tv.total_pages);
   return { items, nextCursor: hasMore ? String(page + 1) : null };
