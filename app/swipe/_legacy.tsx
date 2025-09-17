@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Image from "next/image";
 import ActionDock from "../components/ui/ActionDock";
 import { notify } from "../components/lib/notify";
 
@@ -17,9 +18,25 @@ type Details = {
   rating?: number | null;
 };
 
-type PersonalRecsResponse =
-  | unknown[]
-  | { items?: unknown[] };
+type UnifiedItem = {
+  id: number;
+  tmdbType: MediaType;
+  title: string;
+  year?: string;
+  poster_path?: string | null;
+  vote_average?: number;
+};
+
+type UnifiedRespOk = {
+  ok: true;
+  mode: "group" | "individual";
+  group: { code: string; strictProviders: boolean } | null;
+  language: string;
+  region: string;
+  usedProviderIds: number[];
+  items: UnifiedItem[];
+};
+type UnifiedResp = UnifiedRespOk | { ok: false; message?: string };
 
 // ---- Hjälpare ----
 const THRESH_X = 80;
@@ -39,44 +56,19 @@ const vib = (ms = 24) => {
 };
 
 // ---- API ----
-async function fetchRecs(
-  limit = 150,
-  media: "movie" | "tv" | "both" = "both"
-): Promise<BaseItem[]> {
-  const res = await fetch(`/api/recs/personal?media=${media}&limit=${limit}`, { cache: "no-store" });
+async function fetchRecs(page = 1): Promise<BaseItem[]> {
+  const res = await fetch(`/api/recs/unified?page=${page}`, { cache: "no-store" });
   if (!res.ok) return [];
-  const json = (await res.json().catch(() => null)) as PersonalRecsResponse | null;
-
-  let raw: unknown[] = [];
-  if (Array.isArray(json)) {
-    raw = json;
-  } else if (json && typeof json === "object") {
-    const items = (json as { items?: unknown[] }).items;
-    if (Array.isArray(items)) raw = items;
-  }
-
-  const mapped: BaseItem[] = raw
-    .map((x): BaseItem | null => {
-      if (typeof x !== "object" || x === null) return null;
-      const obj = x as Record<string, unknown>;
-
-      const idRaw = obj.id ?? obj.tmdbId ?? obj.tmdb_id;
-      const id =
-        typeof idRaw === "number"
-          ? idRaw
-          : typeof idRaw === "string"
-          ? Number(idRaw)
-          : NaN;
-
-      const tRaw = obj.type ?? obj.mediaType ?? obj.media_type;
-      const type: MediaType | undefined =
-        tRaw === "movie" || tRaw === "tv" ? (tRaw as MediaType) : undefined;
-
-      if (!Number.isFinite(id) || !type) return null;
-      return { id: id as number, type };
+  const json = (await res.json().catch(() => null)) as UnifiedResp | null;
+  if (!json || !json.ok) return [];
+  const mapped: BaseItem[] = json.items
+    .map((it): BaseItem | null => {
+      if (!Number.isFinite(it.id)) return null;
+      const type = it.tmdbType;
+      if (type !== "movie" && type !== "tv") return null;
+      return { id: it.id, type };
     })
     .filter((v): v is BaseItem => Boolean(v));
-
   return mapped;
 }
 
@@ -135,6 +127,15 @@ async function toggleWatchlist(item: BaseItem) {
   }).catch(() => {});
 }
 
+async function sendGroupVote(item: BaseItem, vote: "LIKE" | "DISLIKE" | "SKIP") {
+  // No-op om ingen aktiv grupp; vi ignorerar fel för att inte störa UX
+  await fetch("/api/group/vote", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ tmdbId: item.id, tmdbType: item.type, vote }),
+  }).catch(() => {});
+}
+
 // ---- Komponent ----
 export default function SwipeLegacy() {
   const [queue, setQueue] = useState<BaseItem[]>([]);
@@ -155,7 +156,7 @@ export default function SwipeLegacy() {
   useEffect(() => {
     let alive = true;
     (async () => {
-      const items = await fetchRecs(30, "both");
+      const items = await fetchRecs(1);
       if (!alive) return;
       setQueue(items);
     })();
@@ -221,7 +222,7 @@ export default function SwipeLegacy() {
     if (!current) return;
     setLeaving("left");
     vib(18);
-    await postRate(current, "dislike");
+    await Promise.all([postRate(current, "dislike"), sendGroupVote(current, "DISLIKE")]);
     setTimeout(advance, 160);
   }, [current, advance]);
 
@@ -229,7 +230,7 @@ export default function SwipeLegacy() {
     if (!current) return;
     setLeaving("right");
     vib(26);
-    await postRate(current, "like");
+    await Promise.all([postRate(current, "like"), sendGroupVote(current, "LIKE")]);
     setTimeout(advance, 160);
   }, [current, advance]);
 
@@ -237,7 +238,7 @@ export default function SwipeLegacy() {
     if (!current) return;
     setLeaving("up");
     vib(26);
-    await toggleWatchlist(current);
+    await Promise.all([toggleWatchlist(current), sendGroupVote(current, "SKIP")]);
     notify("Added to Watchlist");
     setTimeout(advance, 160);
   }, [current, advance]);
@@ -264,13 +265,13 @@ export default function SwipeLegacy() {
       if (!current) return;
       if (e.key === "ArrowRight") {
         e.preventDefault();
-        swipeRight();
+        void swipeRight();
       } else if (e.key === "ArrowLeft") {
         e.preventDefault();
-        swipeLeft();
+        void swipeLeft();
       } else if (e.key === "ArrowUp") {
         e.preventDefault();
-        swipeUp();
+        void swipeUp();
       } else if (e.key === " " || e.code === "Space") {
         e.preventDefault();
         onCardClickOrSpace();
@@ -324,12 +325,16 @@ export default function SwipeLegacy() {
       {!flipped && next && miniPoster && (
         <div className="pointer-events-none mx-4 -mb-3 mt-2 rounded-[18px] border border-neutral-800/80 bg-black/50 shadow">
           <div className="relative h-3 overflow-hidden rounded-t-[18px]">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              alt=""
-              src={miniPoster}
-              className="h-[200px] w-full object-cover opacity-90 blur-[0.5px]"
-            />
+            <div className="relative h-[200px] w-full">
+              <Image
+                alt=""
+                src={miniPoster}
+                fill
+                sizes="100vw"
+                className="object-cover opacity-90 blur-[0.5px] rounded-t-[18px]"
+                priority={false}
+              />
+            </div>
           </div>
         </div>
       )}
@@ -355,12 +360,16 @@ export default function SwipeLegacy() {
             <div className="relative overflow-hidden rounded-[22px]">
               <div className="absolute inset-0 bg-black" />
               {poster ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={poster}
-                  alt={curDetails?.title || "poster"}
-                  className="relative z-[1] h-auto w-full rounded-[22px]"
-                />
+                <div className="relative z-[1] aspect-[2/3] w-full rounded-[22px]">
+                  <Image
+                    src={poster}
+                    alt={curDetails?.title || "poster"}
+                    fill
+                    sizes="(max-width: 768px) 100vw, 600px"
+                    className="rounded-[22px] object-cover"
+                    priority={false}
+                  />
+                </div>
               ) : (
                 <div className="relative z-[1] aspect-[2/3] w-full rounded-[22px] bg-neutral-800" />
               )}
@@ -371,7 +380,7 @@ export default function SwipeLegacy() {
                 <div className="mt-1 text-sm text-neutral-200">
                   {curDetails?.year ?? "—"}
                   {typeof curDetails?.rating === "number" ? (
-                    <span> · ★ {curDetails!.rating!.toFixed(1)}</span>
+                    <span> · ★ {curDetails.rating.toFixed(1)}</span>
                   ) : null}
                 </div>
               </div>

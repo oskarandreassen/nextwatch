@@ -243,6 +243,8 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    
+
     const dobDate: Date = new Date(dobStr as string);
 
     const user = await prisma.user.findUnique({

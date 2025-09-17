@@ -1,33 +1,61 @@
-import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
-import { prisma } from "../../../../lib/prisma";
-
+// app/api/groups/create/route.ts
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-function code6() {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  return Array.from({length:6},()=>chars[Math.floor(Math.random()*chars.length)]).join("");
+import { NextRequest, NextResponse } from "next/server";
+import { cookies } from "next/headers";
+import prisma from "@/lib/prisma";
+import crypto from "node:crypto";
+
+type Body = {
+  name?: string;
+};
+
+function genCode(): string {
+  // 6 tecken A-Z0-9
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let s = "";
+  for (let i = 0; i < 6; i += 1) {
+    const idx = crypto.randomInt(0, alphabet.length);
+    s += alphabet[idx];
+  }
+  return s;
 }
 
-export async function POST() {
-  const c = await cookies();
-  const uid = c.get("nw_uid")?.value;
-  if (!uid) return NextResponse.json({ ok:false, error:"no cookie" }, { status:400 });
+export async function POST(req: NextRequest) {
+  const jar = await cookies();
+  const uid = jar.get("nw_uid")?.value ?? null;
+  if (!uid) return NextResponse.json({ ok: false, message: "Ingen session." }, { status: 401 });
 
-  // se till att user finns
-  await prisma.user.upsert({ where:{ id:uid }, update:{}, create:{ id:uid } });
+  // name tas emot men lagras ej (schema saknar fält) — behåll för framtida bruk
+  const _body = (await req.json()) as Body;
+  let code = genCode();
 
-  // skapa unik kod
-  let code = code6();
-  for (let i=0;i<5;i++) {
-    const exists = await prisma.group.findUnique({ where:{ code } });
+  // säkerställ unik kod
+  for (let i = 0; i < 5; i += 1) {
+    const exists = await prisma.group.findUnique({ where: { code } });
     if (!exists) break;
-    code = code6();
+    code = genCode();
   }
 
-  await prisma.group.create({ data:{ code, createdBy: uid } });
-  await prisma.groupMember.create({ data:{ groupCode: code, userId: uid } });
+  const group = await prisma.group.create({
+    data: {
+      code,
+      createdBy: uid,
+      members: {
+        create: { userId: uid },
+      },
+    },
+    select: { code: true, createdAt: true, createdBy: true },
+  });
 
-  return NextResponse.json({ ok:true, code });
+  const res = NextResponse.json({ ok: true, group });
+  res.cookies.set({
+    name: "nw_group",
+    value: group.code,
+    httpOnly: true,
+    sameSite: "lax",
+    path: "/",
+  });
+  return res;
 }

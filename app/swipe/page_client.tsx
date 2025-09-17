@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import Image from "next/image";
 import { motion, useAnimation } from "framer-motion";
 
 type MediaType = "movie" | "tv";
@@ -16,12 +17,26 @@ export type Card = {
   rating?: number | null;
 };
 
-type ApiRes = {
-  ok: boolean;
-  items?: Card[];
-  nextCursor?: string | null;
-  message?: string;
+type UnifiedItem = {
+  id: number;
+  tmdbType: MediaType;
+  title: string;
+  year?: string;
+  poster_path?: string | null;
+  vote_average?: number;
 };
+
+type UnifiedResp =
+  | {
+      ok: true;
+      mode: "group" | "individual";
+      group: { code: string; strictProviders: boolean } | null;
+      language: string;
+      region: string;
+      usedProviderIds: number[];
+      items: UnifiedItem[];
+    }
+  | { ok: false; message?: string };
 
 /* ---------------- Local persistence (hide/seen) ---------------- */
 
@@ -76,54 +91,110 @@ function markSeen(id: string) {
   writeSeen(s);
 }
 
+/* ---------------- Helpers ---------------- */
+
+function toPoster(p?: string | null, w: "w342" | "w500" | "w780" = "w780"): string | null {
+  if (!p) return null;
+  return p.startsWith("http") ? p : `https://image.tmdb.org/t/p/${w}${p}`;
+}
+
+async function sendGroupVote(params: {
+  tmdbId: number;
+  tmdbType: MediaType;
+  vote: "LIKE" | "DISLIKE" | "SKIP";
+}): Promise<void> {
+  await fetch("/api/group/vote", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    cache: "no-store",
+    body: JSON.stringify(params),
+  }).catch(() => {});
+}
+
 /* ---------------- Component ---------------- */
 
 export default function SwipePageClient() {
   const [cards, setCards] = useState<Card[]>([]);
-  const [cursor, setCursor] = useState<string | null>(null);
+  const [page, setPage] = useState<number>(1);
+  const [hasMore, setHasMore] = useState<boolean>(true);
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [flippedId, setFlippedId] = useState<string | null>(null);
 
+  // NEW: badge-state
+  const [mode, setMode] = useState<"group" | "individual">("individual");
+  const [group, setGroup] = useState<{ code: string; strictProviders: boolean } | null>(null);
+
   const controls = useAnimation();
 
   const topCard = cards[0];
-  const hasMore = useMemo(() => Boolean(cursor), [cursor]);
 
-  const loadMore = useCallback(
-    async (initial: boolean) => {
+  const loadPage = useCallback(
+    async (targetPage: number, replace: boolean) => {
       if (loading) return;
       setLoading(true);
       try {
-        const url = new URL("/api/recs", window.location.origin);
-        if (!initial && cursor) url.searchParams.set("cursor", cursor);
-        const res = await fetch(url.toString(), { cache: "no-store" });
-        const data = (await res.json()) as ApiRes;
-        if (data.ok && data.items) {
-          const filtered = data.items
-            .filter((c) => !isHidden(c.tmdbId))
-            .filter((c) => !isSeen(c.id));
-          setCards((prev) => (initial ? filtered : [...prev, ...filtered]));
-          setCursor(data.nextCursor ?? null);
+        const res = await fetch(`/api/recs/unified?page=${targetPage}`, { cache: "no-store" });
+        if (!res.ok) {
+          setHasMore(false);
+          return;
         }
+        const data = (await res.json()) as UnifiedResp;
+        if (!("ok" in data) || !data.ok) {
+          setHasMore(false);
+          return;
+        }
+
+        // uppdatera badge-info varje laddning (stabilt även över pagination)
+        setMode(data.mode);
+        setGroup(data.group);
+
+        const mapped: Card[] = data.items
+          .map((it): Card | null => {
+            if (!Number.isFinite(it.id)) return null;
+            const id = `${it.tmdbType}_${it.id}`;
+            const poster = toPoster(it.poster_path, "w780");
+            return {
+              id,
+              tmdbId: it.id,
+              mediaType: it.tmdbType,
+              title: it.title,
+              year: it.year ?? null,
+              poster,
+              overview: null, // unified returnerar inte overview
+              rating: typeof it.vote_average === "number" ? it.vote_average : null,
+            };
+          })
+          .filter((v): v is Card => Boolean(v))
+          .filter((c) => !isHidden(c.tmdbId))
+          .filter((c) => !isSeen(c.id));
+
+        if (replace) {
+          setCards(mapped);
+        } else {
+          setCards((prev) => [...prev, ...mapped]);
+        }
+        setHasMore(mapped.length > 0);
       } finally {
         setLoading(false);
       }
     },
-    [cursor, loading]
+    [loading]
   );
 
   // Första laddningen
   useEffect(() => {
-    void loadMore(true);
-  }, [loadMore]);
+    void loadPage(1, true);
+  }, [loadPage]);
 
   // Autoladda när det börjar ta slut
   useEffect(() => {
     if (!loading && cards.length < 3 && hasMore) {
-      void loadMore(false);
+      const nextPage = page + 1;
+      setPage(nextPage);
+      void loadPage(nextPage, false);
     }
-  }, [cards.length, hasMore, loading, loadMore]);
+  }, [cards.length, hasMore, loading, page, loadPage]);
 
   function popTop() {
     setFlippedId(null);
@@ -133,6 +204,7 @@ export default function SwipePageClient() {
   async function handleDislike(c: Card) {
     markSeen(c.id);
     hideFor7Days(c.tmdbId);
+    await sendGroupVote({ tmdbId: c.tmdbId, tmdbType: c.mediaType, vote: "DISLIKE" });
     popTop();
   }
 
@@ -157,6 +229,7 @@ export default function SwipePageClient() {
     } catch {
       setToast("Misslyckades att lägga till ❌");
     } finally {
+      await sendGroupVote({ tmdbId: c.tmdbId, tmdbType: c.mediaType, vote: "LIKE" });
       window.setTimeout(() => setToast(null), 1500);
       popTop();
     }
@@ -172,6 +245,13 @@ export default function SwipePageClient() {
 
   return (
     <div className="relative mx-auto w-full max-w-md" style={{ minHeight: 620 }}>
+      {/* Badge: visas bara i grupp-läge */}
+      {mode === "group" && group?.code && (
+        <div className="pointer-events-none absolute top-2 left-1/2 z-30 -translate-x-1/2 rounded-full border border-violet-500/40 bg-violet-600/15 px-3 py-1 text-xs font-medium text-violet-200 backdrop-blur">
+          Swiping as: <span className="font-mono tracking-wider">{group.code}</span>
+        </div>
+      )}
+
       {/* Toast */}
       {toast && (
         <div className="fixed bottom-36 left-1/2 -translate-x-1/2 rounded-xl bg-black/85 px-4 py-2 text-sm text-white shadow">
@@ -180,9 +260,9 @@ export default function SwipePageClient() {
       )}
 
       {/* ENDAST TOPPKORT RENDERAS */}
-      {topCard ? (
+      {cards[0] ? (
         <motion.div
-          key={topCard.id}
+          key={cards[0].id}
           className="absolute inset-x-0 top-0 z-10 flex items-center justify-center"
           animate={controls}
           drag="x"
@@ -194,21 +274,23 @@ export default function SwipePageClient() {
 
             // Right = like
             if (x > DIST_THRESHOLD || v > VELOCITY_THRESHOLD) {
+              const c = cards[0];
               void controls
                 .start({ x: 520, rotate: 18, opacity: 0, transition: { duration: 0.22 } })
-                .then(() => {
-                  void handleLike(topCard);
-                  void controls.start({ x: 0, rotate: 0, opacity: 1 });
+                .then(async () => {
+                  await handleLike(c);
+                  await controls.start({ x: 0, rotate: 0, opacity: 1 });
                 });
               return;
             }
             // Left = dislike
             if (x < -DIST_THRESHOLD || v < -VELOCITY_THRESHOLD) {
+              const c = cards[0];
               void controls
                 .start({ x: -520, rotate: -18, opacity: 0, transition: { duration: 0.22 } })
-                .then(() => {
-                  void handleDislike(topCard);
-                  void controls.start({ x: 0, rotate: 0, opacity: 1 });
+                .then(async () => {
+                  await handleDislike(c);
+                  await controls.start({ x: 0, rotate: 0, opacity: 1 });
                 });
               return;
             }
@@ -217,9 +299,9 @@ export default function SwipePageClient() {
           }}
         >
           <StaticCard
-            card={topCard}
-            flipped={flippedId === topCard.id}
-            onFlip={() => setFlippedId((p) => (p === topCard.id ? null : topCard.id))}
+            card={cards[0]}
+            flipped={flippedId === cards[0].id}
+            onFlip={() => setFlippedId((p) => (p === cards[0].id ? null : cards[0].id))}
           />
         </motion.div>
       ) : (
@@ -228,19 +310,20 @@ export default function SwipePageClient() {
         </div>
       )}
 
-      {/* FOOTER-KNAPPAR – längre under, större, tydligare + exit-animationer */}
+      {/* FOOTER-KNAPPAR */}
       <div className="pointer-events-auto absolute inset-x-0 bottom-6 z-20 flex items-center justify-center gap-8">
         <button
           aria-label="Nej"
           onClick={() =>
-            topCard &&
+            cards[0] &&
             (async () => {
+              const c = cards[0];
               await controls.start({ x: -520, rotate: -18, opacity: 0, transition: { duration: 0.22 } });
-              await handleDislike(topCard);
+              await handleDislike(c);
               await controls.start({ x: 0, rotate: 0, opacity: 1 });
             })()
           }
-          className="h-16 w-16 rounded-full bg-red-500/15 text-red-400 ring-2 ring-red-400/40 backdrop-blur hover:bg-red-500/25 transition"
+          className="h-16 w-16 rounded-full bg-red-500/15 text-red-400 ring-2 ring-red-400/40 backdrop-blur transition hover:bg-red-500/25"
           title="Nej"
         >
           <span className="text-2xl">✖</span>
@@ -248,8 +331,8 @@ export default function SwipePageClient() {
 
         <button
           aria-label="Info"
-          onClick={() => topCard && onInfo(topCard)}
-          className="h-14 w-14 rounded-full bg-white/10 text-white ring-1 ring-white/30 backdrop-blur hover:bg-white/20 transition"
+          onClick={() => cards[0] && onInfo(cards[0])}
+          className="h-14 w-14 rounded-full bg-white/10 text-white ring-1 ring-white/30 backdrop-blur transition hover:bg-white/20"
           title="Info"
         >
           <span className="text-xl">i</span>
@@ -258,14 +341,15 @@ export default function SwipePageClient() {
         <button
           aria-label="Gilla"
           onClick={() =>
-            topCard &&
+            cards[0] &&
             (async () => {
+              const c = cards[0];
               await controls.start({ x: 520, rotate: 18, opacity: 0, transition: { duration: 0.22 } });
-              await handleLike(topCard);
+              await handleLike(c);
               await controls.start({ x: 0, rotate: 0, opacity: 1 });
             })()
           }
-          className="h-16 w-16 rounded-full bg-emerald-500/15 text-emerald-400 ring-2 ring-emerald-400/40 backdrop-blur hover:bg-emerald-500/25 transition"
+          className="h-16 w-16 rounded-full bg-emerald-500/15 text-emerald-400 ring-2 ring-emerald-400/40 backdrop-blur transition hover:bg-emerald-500/25"
           title="Gilla"
         >
           <span className="text-2xl">❤</span>
@@ -309,8 +393,16 @@ function Front({ card }: { card: Card }) {
   return (
     <div className="relative h-full w-full overflow-hidden rounded-2xl">
       {card.poster ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img src={card.poster} alt={card.title} className="h-full w-full object-cover" loading="lazy" />
+        <div className="relative h-full w-full">
+          <Image
+            src={card.poster}
+            alt={card.title}
+            fill
+            sizes="(max-width: 768px) 100vw, 600px"
+            className="object-cover"
+            priority={false}
+          />
+        </div>
       ) : (
         <div className="flex h-full w-full items-center justify-center bg-neutral-800">{card.title}</div>
       )}

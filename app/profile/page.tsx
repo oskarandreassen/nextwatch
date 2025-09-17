@@ -59,24 +59,26 @@ export default async function ProfilePage() {
       where: { userId: uid },
       select: {
         displayName: true,
-        dob: true,
+        dob: true, // Date | null
         region: true,
         locale: true,
         uiLanguage: true,
-        favoriteGenres: true,
-        favoriteMovie: true,
-        favoriteShow: true,
+        favoriteGenres: true, // Json
+        favoriteMovie: true,  // Json
+        favoriteShow: true,   // Json
       },
     });
 
     if (prof) {
       const favoriteGenres = Array.isArray(prof.favoriteGenres)
-        ? (prof.favoriteGenres as unknown[]).filter((g): g is string => typeof g === "string")
+        ? (prof.favoriteGenres as unknown[]).filter(
+            (g): g is string => typeof g === "string"
+          )
         : [];
 
       initial = {
         displayName: prof.displayName ?? null,
-        dob: toDateInput((prof.dob as unknown) as Date | string | null),
+        dob: prof.dob ? toDateInput(prof.dob) : null,
         region: prof.region ?? null,
         locale: prof.locale ?? null,
         uiLanguage: prof.uiLanguage ?? null,

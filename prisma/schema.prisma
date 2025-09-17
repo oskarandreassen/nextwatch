@@ -20,6 +20,9 @@ model User {
   passwordHash  String?   @map("password_hash")
   lastLoginAt   DateTime? @map("last_login_at")
 
+  // NEW ↓↓↓
+  username      String?   @unique
+
   profile       Profile?
   ratings       Rating[]
   watchlist     watchlist[]
@@ -27,6 +30,10 @@ model User {
 
   groupMembers  GroupMember[] @relation("UserGroupMembers")
   groupsCreated Group[]        @relation("UserGroupsCreated")
+
+  // NEW: vänrelationer
+  friendshipsRequested Friendship[] @relation("FriendshipsRequested")
+  friendshipsReceived  Friendship[] @relation("FriendshipsReceived")
 
   verifications Verification[]
 
@@ -121,6 +128,9 @@ model Group {
   members GroupMember[]
   creator User @relation("UserGroupsCreated", fields: [createdBy], references: [id], onDelete: Cascade)
 
+  // NEW: röster i grupp (enkel läsning via relation)
+  votes   GroupVote[]
+
   @@map("groups")
 }
 
@@ -134,4 +144,41 @@ model GroupMember {
 
   @@id([groupCode, userId])
   @@map("group_members")
+}
+
+// NEW: Vänförfrågningar + vänner
+model Friendship {
+  id           String   @id
+  requesterId  String   @map("requester_id")
+  addresseeId  String   @map("addressee_id")
+  status       String   @default("PENDING") // 'PENDING' | 'ACCEPTED' | 'BLOCKED'
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  requester User @relation("FriendshipsRequested", fields: [requesterId], references: [id], onDelete: Cascade)
+  addressee User @relation("FriendshipsReceived",  fields: [addresseeId], references: [id], onDelete: Cascade)
+
+  @@unique([requesterId, addresseeId])
+  @@index([requesterId], map: "idx_friendships_requester")
+  @@index([addresseeId], map: "idx_friendships_addressee")
+  @@map("friendships")
+}
+
+// NEW: Röster för group-swipe
+model GroupVote {
+  id        String   @id
+  groupCode String   @map("group_code")
+  userId    String   @map("user_id")
+  tmdbId    Int      @map("tmdb_id")
+  mediaType String   @map("media_type") // 'movie' | 'tv'
+  vote      String   @default("LIKE")    // 'LIKE' | 'DISLIKE' | 'SKIP'
+  createdAt DateTime @default(now()) @map("created_at")
+
+  group Group @relation(fields: [groupCode], references: [code], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // 1 röst per användare/titel/grupp
+  @@unique([groupCode, userId, tmdbId, mediaType], map: "uniq_group_vote")
+  @@index([groupCode], map: "idx_group_vote_group")
+  @@index([userId], map: "idx_group_vote_user")
+  @@map("group_votes")
 }

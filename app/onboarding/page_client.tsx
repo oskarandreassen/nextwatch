@@ -276,18 +276,16 @@ export default function OnboardingPage() {
     setErr(null);
     setLoading(true);
 
+    // Viktigt: region/locale skickas inte längre (servern härleder själv)
     const payload = {
       displayName,
       dob,
-      region,
-      locale,
       uiLanguage: language,
       providers,
       favoriteMovie,
       favoriteShow,
       favoriteGenres: likeGenres,
       dislikedGenres: dislikeGenres,
-      language,
     };
 
     try {
@@ -296,10 +294,12 @@ export default function OnboardingPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      const data: { ok?: boolean; message?: string } = await res.json();
-      if (!res.ok || !data?.ok) {
-        throw new Error(data?.message || "Ett fel uppstod.");
+      if (!res.ok) {
+        const errBody = (await res.json()) as { message?: string };
+        throw new Error(errBody.message ?? "Ett fel uppstod.");
       }
+      const data = (await res.json()) as { ok?: boolean; message?: string };
+      if (!data.ok) throw new Error(data.message ?? "Ett fel uppstod.");
       router.replace("/auth/register");
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Ett fel uppstod.");
@@ -366,6 +366,9 @@ export default function OnboardingPage() {
                 ))}
               </select>
             </div>
+
+            {/* Region/Locale lämnas visuellt kvar enligt din nuvarande UI,
+                men påverkar inte längre payload till servern */}
             <div>
               <label className="mb-1 block text-sm text-white/70">Region</label>
               <select

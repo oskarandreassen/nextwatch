@@ -1,3 +1,4 @@
+// app/profile/ProfileClient.tsx
 'use client';
 
 import { useEffect, useState } from 'react';
@@ -26,24 +27,21 @@ type InitialProfile = {
 const ALL_LANGS: { code: string; label: string }[] = [
   { code: 'sv', label: 'Svenska' },
   { code: 'en', label: 'English' },
-  // lägg fler vid behov
 ];
 
-// Anta att du redan har dessa listor i projektet – annars kan vi läsa från TMDB helpers
 const ALL_GENRES = [
   'Action', 'Adventure', 'Animation', 'Comedy', 'Crime', 'Documentary', 'Drama',
   'Family', 'Fantasy', 'History', 'Horror', 'Music', 'Mystery', 'Romance',
   'Science Fiction', 'TV Movie', 'Thriller', 'War', 'Western'
-];
+] as const;
 
 const ALL_PROVIDERS = [
   'Netflix', 'Disney Plus', 'HBO Max', 'Amazon Prime Video', 'Viaplay', 'Apple TV Plus', 'SkyShowtime'
-];
+] as const;
 
 async function loadProfile(): Promise<Partial<Profile>> {
   const res = await fetch('/api/profile/get', { cache: 'no-store' });
   if (!res.ok) throw new Error('Failed to load profile');
-  // /api/profile/get kan returnera null i vissa fält; normalisera varsamt i useEffect istället
   return (await res.json()) as Partial<Profile>;
 }
 
@@ -57,10 +55,22 @@ async function saveProfile(p: Profile): Promise<SaveResp> {
       dislikedGenres: p.dislikedGenres,
       providers: p.providers,
       uiLanguage: p.uiLanguage,
-      // ⚠️ Region & Locale skickas inte – tas från cookies/IP på servern
+      // Region & Locale skickas inte – servern härleder från cookies/IP
     }),
     headers: { 'Content-Type': 'application/json' },
+    cache: 'no-store',
   });
+
+  if (!res.ok) {
+    // Försök läsa serverns felmeddelande, annars generiskt
+    let message = 'Ett fel uppstod.';
+    try {
+      const data = (await res.json()) as { message?: string };
+      if (data?.message) message = data.message;
+    } catch { /* ignore */ }
+    return { ok: false, message };
+  }
+
   return (await res.json()) as SaveResp;
 }
 
@@ -69,15 +79,15 @@ export default function ProfileClient({ initial }: { initial?: InitialProfile })
   const [p, setP] = useState<Profile>(() => ({
     displayName: initial?.displayName ?? '',
     dob: initial?.dob ?? '',
-    favoriteGenres: Array.isArray(initial?.favoriteGenres) ? initial!.favoriteGenres! : [],
-    dislikedGenres: Array.isArray(initial?.dislikedGenres) ? initial!.dislikedGenres! : [],
-    providers: Array.isArray(initial?.providers) ? initial!.providers! : [],
+    favoriteGenres: Array.isArray(initial?.favoriteGenres) ? initial.favoriteGenres! : [],
+    dislikedGenres: Array.isArray(initial?.dislikedGenres) ? initial.dislikedGenres! : [],
+    providers: Array.isArray(initial?.providers) ? initial.providers! : [],
     uiLanguage: initial?.uiLanguage ?? 'sv',
   }));
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
-  // Hämta färsk profil (om du vill låta serversidan sätta mer/andra fält)
+  // Hämta färsk profil (om serversidan fyller på andra fält)
   useEffect(() => {
     (async () => {
       try {
@@ -91,7 +101,7 @@ export default function ProfileClient({ initial }: { initial?: InitialProfile })
           uiLanguage: (data.uiLanguage ?? old.uiLanguage) ?? 'sv',
         }));
       } catch {
-        // noop – vi behåller initialt värde
+        // noop – behåll initialt värde
       }
     })();
   }, []);
@@ -224,7 +234,7 @@ export default function ProfileClient({ initial }: { initial?: InitialProfile })
           })}
         </div>
         <p className="mt-2 text-xs text-neutral-400">
-          Region & Locale sätts automatiskt (cookies/IP) och visas inte här.
+          Region &amp; Locale sätts automatiskt (cookies/IP) och visas inte här.
         </p>
       </section>
 

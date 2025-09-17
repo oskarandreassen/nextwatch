@@ -1,4 +1,4 @@
-// app/api/groups/join/route.ts
+// app/api/groups/leave/route.ts
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -17,22 +17,23 @@ export async function POST(req: NextRequest) {
   const code = (body.code ?? "").trim().toUpperCase();
   if (code.length < 4) return NextResponse.json({ ok: false, message: "Ogiltig kod." }, { status: 400 });
 
-  const grp = await prisma.group.findUnique({ where: { code }, select: { code: true } });
-  if (!grp) return NextResponse.json({ ok: false, message: "Gruppen finns inte." }, { status: 404 });
-
-  await prisma.groupMember.upsert({
-    where: { groupCode_userId: { groupCode: code, userId: uid } },
-    create: { groupCode: code, userId: uid },
-    update: {},
+  // Ta bort medlemskap om det finns
+  await prisma.groupMember.deleteMany({
+    where: { groupCode: code, userId: uid },
   });
 
-  const res = NextResponse.json({ ok: true, group: { code } });
-  res.cookies.set({
-    name: "nw_group",
-    value: code,
-    httpOnly: true,
-    sameSite: "lax",
-    path: "/",
-  });
+  // Om aktiv cookie pekar på samma grupp — ta bort den
+  const res = NextResponse.json({ ok: true });
+  const current = jar.get("nw_group")?.value ?? null;
+  if (current === code) {
+    res.cookies.set({
+      name: "nw_group",
+      value: "",
+      httpOnly: true,
+      sameSite: "lax",
+      path: "/",
+      maxAge: 0,
+    });
+  }
   return res;
 }
