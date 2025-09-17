@@ -1,9 +1,8 @@
-// app/api/tmdb/watch-providers/route.ts
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 import { NextResponse } from 'next/server';
-import { cookies } from 'next/headers';
+import { cookies, headers } from 'next/headers';
 
 type Provider = {
   provider_id: number;
@@ -28,12 +27,20 @@ const TMDB_BASE = 'https://api.themoviedb.org/3';
 async function tmdbGet<T>(path: string): Promise<T> {
   const v4 = process.env.TMDB_v4_TOKEN;
   const v3 = process.env.TMDB_API_KEY;
-  const headers: Record<string, string> = {};
-  if (v4) headers.Authorization = `Bearer ${v4}`;
-  const url = `${TMDB_BASE}${path}${path.includes('?') ? '&' : '?'}api_key=${v3 ?? ''}`;
-  const res = await fetch(url, { headers, cache: 'no-store' });
+  const headersObj: Record<string, string> = {};
+  let url = `${TMDB_BASE}${path}`;
+  if (v4) headersObj.Authorization = `Bearer ${v4}`;
+  if (!v4 && v3) url += `${path.includes('?') ? '&' : '?'}api_key=${v3}`;
+  if (!v4 && !v3) throw new Error('TMDB credentials missing');
+  const res = await fetch(url, { headers: headersObj, cache: 'no-store' });
   if (!res.ok) throw new Error(`TMDB ${res.status}`);
   return (await res.json()) as T;
+}
+
+function pickCountry(h: string | null): string | null {
+  if (!h) return null;
+  const m = h.match(/-([A-Z]{2})/);
+  return m?.[1] ?? null;
 }
 
 export async function GET(req: Request) {
@@ -45,11 +52,13 @@ export async function GET(req: Request) {
       return NextResponse.json({ ok: false, message: 'Missing id or type (movie|tv).' }, { status: 400 });
     }
 
-    // ⚠️ Viktigt: vänta in cookies() i din miljö
     const jar = await cookies();
+    const hdr = await headers();
+
     const region =
       jar.get('nw_region')?.value ||
-      jar.get('tmdbRegion')?.value ||
+      hdr.get('x-vercel-ip-country') ||
+      pickCountry(hdr.get('accept-language')) ||
       'SE';
 
     const data = await tmdbGet<ProvidersResp>(`/${type}/${id}/watch/providers`);
@@ -65,6 +74,6 @@ export async function GET(req: Request) {
     );
   } catch (e) {
     console.error('[providers GET] ', e);
-    return NextResponse.json({ ok: false, message: 'Failed to load watch providers.' }, { status: 500 });
+    return NextResponse.json({ ok: false, message: 'Failed to load watch providers.' }, { status: 200 });
   }
 }
