@@ -29,8 +29,8 @@ type ProvidersResp = {
 
 type Detail = {
   overview?: string;
-  runtime?: number; // movies
-  episode_run_time?: number[]; // tv
+  runtime?: number;
+  episode_run_time?: number[];
 };
 
 async function fetchProviders(id: number, tmdbType: 'movie' | 'tv'): Promise<ProvidersResp> {
@@ -87,7 +87,6 @@ export default function WatchlistClient({ items }: { items: WatchItem[] }) {
 
   return (
     <>
-      {/* Grid med klickbara kort */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
         {items.map((it) => (
           <button
@@ -120,7 +119,6 @@ export default function WatchlistClient({ items }: { items: WatchItem[] }) {
         ))}
       </div>
 
-      {/* Modal */}
       <Modal open={Boolean(active)} onClose={close} labelledBy="watchlist-modal-title">
         {active && (
           <div className="flex flex-col gap-4 md:flex-row">
@@ -146,7 +144,6 @@ export default function WatchlistClient({ items }: { items: WatchItem[] }) {
                 {loading ? 'Laddar info…' : (detail.overview || 'Ingen beskrivning tillgänglig.')}
               </p>
 
-              {/* Providers */}
               <div className="mt-4 space-y-3">
                 {groups.length === 0 && !loading && (
                   <p className="text-sm text-neutral-400">Ingen tillgänglig streamingdata för din region just nu.</p>
@@ -180,7 +177,6 @@ export default function WatchlistClient({ items }: { items: WatchItem[] }) {
                 ))}
               </div>
 
-              {/* Primär CTA */}
               <div className="mt-5">
                 <WatchNowButton url={providers?.link} />
               </div>

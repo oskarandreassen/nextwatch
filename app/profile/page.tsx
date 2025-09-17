@@ -34,7 +34,6 @@ function toDateInput(d: Date | string | null): string {
   return `${yyyy}-${mm}-${dd}`;
 }
 
-// Säker konvertering från okänd JSON till FavoriteItem
 function asFavoriteItem(x: unknown): FavoriteItem | null {
   if (!x || typeof x !== "object") return null;
   const obj = x as Record<string, unknown>;
@@ -88,11 +87,6 @@ export default async function ProfilePage() {
     }
   }
 
-  return (
-    <div className="mx-auto max-w-6xl p-4">
-      <h1 className="mb-4 text-2xl font-semibold">Profil</h1>
-      {/* ProfileClient hanterar nu null i initial */}
-      <ProfileClient initial={initial} />
-    </div>
-  );
+  // Låt ProfileClient visa rubriken för att undvika dubblering
+  return <ProfileClient initial={initial} />;
 }

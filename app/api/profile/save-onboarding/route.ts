@@ -1,6 +1,6 @@
 // app/api/profile/save-onboarding/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import prisma from "../../../../lib/prisma";
 import { Prisma } from "@prisma/client";
 
@@ -170,6 +170,33 @@ function fail(
   return NextResponse.json(body, { status });
 }
 
+// —— Region/Locale helpers ——
+function firstAcceptLanguage(h: string | null): string | null {
+  if (!h) return null;
+  const first = h.split(",")[0]?.trim();
+  return first || null;
+}
+
+async function inferRegionAndLocale(): Promise<{ region: string; locale: string }> {
+  const jar = await cookies();
+  const hdr = await headers();
+
+  const ipCountry = hdr.get("x-vercel-ip-country"); // ex. "SE" på Vercel
+  const acceptLang = firstAcceptLanguage(hdr.get("accept-language")); // ex. "sv-SE"
+
+  const region =
+    jar.get("nw_region")?.value ||
+    (ipCountry && /^[A-Z]{2}$/.test(ipCountry) ? ipCountry : null) ||
+    "SE";
+
+  const locale =
+    jar.get("nw_locale")?.value ||
+    (acceptLang && /^[a-z]{2}(-[A-Z]{2})?$/.test(acceptLang) ? acceptLang : null) ||
+    "sv-SE";
+
+  return { region, locale };
+}
+
 // ——— Route ———
 export async function POST(req: NextRequest) {
   const debug = new URL(req.url).searchParams.get("debug") === "1";
@@ -184,9 +211,9 @@ export async function POST(req: NextRequest) {
     const body = (await req.json()) as Record<string, unknown>;
 
     const displayName = (body.displayName as string | undefined)?.trim();
-    const region = (body.region as string | undefined)?.trim();
-    const locale = (body.locale as string | undefined)?.trim();
-    const uiLanguage = (body.uiLanguage as string | undefined)?.trim();
+    const bodyRegion = (body.region as string | undefined)?.trim();
+    const bodyLocale = (body.locale as string | undefined)?.trim();
+    const bodyUiLanguage = (body.uiLanguage as string | undefined)?.trim();
     const providers = body.providers;
     const favoriteMovie = body.favoriteMovie;
     const favoriteShow = body.favoriteShow;
@@ -195,12 +222,21 @@ export async function POST(req: NextRequest) {
 
     const dobStr = extractDob(body);
 
+    // Härled region/locale från cookies/headers, men tillåt body att override:a om satt
+    const inferred = await inferRegionAndLocale();
+    const finalRegion =
+      bodyRegion && bodyRegion.length === 2 ? bodyRegion : inferred.region;
+    const finalLocale =
+      bodyLocale && bodyLocale.length >= 2 ? bodyLocale : inferred.locale;
+    const finalUiLanguage =
+      bodyUiLanguage && bodyUiLanguage.length > 0
+        ? bodyUiLanguage
+        : (finalLocale.split("-")[0] || "sv");
+
     const missing: string[] = [];
     if (!displayName) missing.push("displayName");
     if (!dobStr) missing.push("dob");
-    if (!region) missing.push("region");
-    if (!locale) missing.push("locale");
-    if (!uiLanguage) missing.push("uiLanguage");
+    // OBS: region/locale lämnas utanför eftersom vi härleder dem automatiskt
     if (missing.length) {
       return fail(400, `Obligatoriska fält saknas: ${missing.join(", ")}`, debug, {
         receivedKeys: Object.keys(body),
@@ -225,9 +261,9 @@ export async function POST(req: NextRequest) {
 
     const updateData: Prisma.ProfileUpdateInput = {
       displayName,
-      region,
-      locale,
-      uiLanguage,
+      region: finalRegion,
+      locale: finalLocale,
+      uiLanguage: finalUiLanguage,
       providers: providersJson,
       favoriteMovie: favMovieJson,
       favoriteShow: favShowJson,
@@ -240,9 +276,9 @@ export async function POST(req: NextRequest) {
       user: { connect: { id: uid } },
       dob: dobDate,
       displayName,
-      region: region!,
-      locale: locale!,
-      uiLanguage: uiLanguage!,
+      region: finalRegion,
+      locale: finalLocale,
+      uiLanguage: finalUiLanguage,
       providers: providersJson,
       favoriteMovie: favMovieJson,
       favoriteShow: favShowJson,
@@ -268,7 +304,21 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    return NextResponse.json({ ok: true, profile: saved });
+    // Sätt cookies så resten av appen använder samma region/locale
+    const res = NextResponse.json({ ok: true, profile: saved });
+    res.cookies.set("nw_region", finalRegion, {
+      path: "/",
+      httpOnly: false,
+      sameSite: "lax",
+      maxAge: 60 * 60 * 24 * 365,
+    });
+    res.cookies.set("nw_locale", finalLocale, {
+      path: "/",
+      httpOnly: false,
+      sameSite: "lax",
+      maxAge: 60 * 60 * 24 * 365,
+    });
+    return res;
   } catch (err) {
     if (err instanceof Prisma.PrismaClientKnownRequestError) {
       return fail(500, "Prisma-fel.", true, { code: err.code, meta: err.meta });

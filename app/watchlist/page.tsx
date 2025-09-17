@@ -18,7 +18,6 @@ type ApiResponse =
   | { ok: true; items: ApiItem[] }
   | { ok: false; message?: string };
 
-/** Skicka vidare alla cookies till API-routen så den kan identifiera användaren */
 async function buildCookieHeader(): Promise<string> {
   const jar = await cookies();
   const all = jar.getAll();
@@ -26,18 +25,21 @@ async function buildCookieHeader(): Promise<string> {
 }
 
 async function getWatchlistServer(): Promise<ApiItem[]> {
-  const hdrs = await headers(); // din typdeklaration gör headers() async
+  const hdrs = await headers();
   const host = hdrs.get('host') ?? 'localhost:3000';
   const proto =
     hdrs.get('x-forwarded-proto') ??
     (host.includes('localhost') ? 'http' : 'https');
 
   const url = `${proto}://${host}/api/watchlist/list`;
+
   const res = await fetch(url, {
-    method: 'GET',
+    method: 'POST',
     headers: {
       Cookie: await buildCookieHeader(),
+      'Content-Type': 'application/json',
     },
+    body: JSON.stringify({}), // om din route förväntar body
     cache: 'no-store',
   });
 
