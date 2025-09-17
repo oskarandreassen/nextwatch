@@ -1,34 +1,43 @@
 // app/api/user/username/check/route.ts
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import prisma from "@/lib/prisma";
 
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
+type Ok = { ok: true; available: boolean };
+type Err = { ok: false; message: string };
 
-function normalizeUsername(u: string | null): string | null {
-  if (!u) return null;
-  const s = u.trim().toLowerCase();
-  if (s.length < 3 || s.length > 20) return null;
-  if (!/^[a-z0-9_]+$/.test(s)) return null;
-  return s;
+function valid(u: string): boolean {
+  // 3–20 tecken, a–z0–9_, skiftlägesokänsligt
+  return /^[a-z0-9_]{3,20}$/i.test(u);
 }
 
-export async function GET(req: NextRequest) {
-  const q = new URL(req.url).searchParams.get("u");
-  const candidate = normalizeUsername(q);
-  if (!candidate) {
-    return NextResponse.json({ ok: true, available: false, message: "Invalid username" }, { status: 200 });
-  }
+type ExistsRow = { exists: boolean };
 
+export async function GET(req: NextRequest) {
   const jar = await cookies();
   const uid = jar.get("nw_uid")?.value ?? null;
+  if (!uid) return NextResponse.json({ ok: false, message: "Ingen session." } as Err, { status: 401 });
 
-  const existing = await prisma.user.findFirst({
-    where: { username: candidate },
-    select: { id: true },
-  });
+  const u = new URL(req.url);
+  const username = (u.searchParams.get("u") ?? u.searchParams.get("username") ?? "").trim();
+  if (!username) {
+    return NextResponse.json({ ok: false, message: "Saknar 'username'." } as Err, { status: 400 });
+  }
+  if (!valid(username)) {
+    return NextResponse.json({ ok: false, message: "Ogiltigt format." } as Err, { status: 400 });
+  }
 
-  const available = !existing || (uid !== null && existing.id === uid);
-  return NextResponse.json({ ok: true, available });
+  const exists = await prisma.$queryRaw<ExistsRow[]>`
+    SELECT EXISTS(
+      SELECT 1 FROM users
+      WHERE username IS NOT NULL
+        AND LOWER(username) = LOWER(${username})
+        AND id <> ${uid}
+    ) AS exists
+  `;
+
+  return NextResponse.json({ ok: true, available: !Boolean(exists[0]?.exists) } as Ok);
 }

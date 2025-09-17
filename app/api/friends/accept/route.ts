@@ -14,13 +14,19 @@ function json(status: number, body: Ok | Err) {
 }
 
 type Body = {
-  // Acceptera genom ett specifikt friend_request-id (uuid från DB)
   requestId?: string;
-  // Alternativ: acceptera pending request från given avsändare
   fromUserId?: string;
-  // Alternativ: acceptera pending request från given avsändares username
   fromUsername?: string;
 };
+
+type FriendRequestRow = {
+  id: string;
+  from_user_id: string;
+  to_user_id: string;
+  status: string;
+};
+
+type IdRow = { id: string };
 
 export async function POST(req: NextRequest) {
   const jar = await cookies();
@@ -42,61 +48,62 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  // Hitta pending friend request riktad till inloggad användare
-  // 1) via requestId
-  // 2) via fromUserId -> uid
-  // 3) via fromUsername -> uid
-  const pending = await (async () => {
-    if (requestId) {
-      return prisma.friendRequest.findFirst({
-        where: { id: requestId, toUserId: uid, status: "pending" },
-        select: { id: true, fromUserId: true, toUserId: true, status: true },
-      });
-    }
-    if (fromUserId) {
-      return prisma.friendRequest.findFirst({
-        where: { fromUserId, toUserId: uid, status: "pending" },
-        select: { id: true, fromUserId: true, toUserId: true, status: true },
-      });
-    }
+  // 1) Hitta pending friend request riktad till uid
+  let pending: FriendRequestRow | null = null;
+
+  if (requestId) {
+    const rows = await prisma.$queryRaw<FriendRequestRow[]>`
+      SELECT id, from_user_id, to_user_id, status
+      FROM friend_requests
+      WHERE id = ${requestId} AND to_user_id = ${uid} AND status = 'pending'
+      LIMIT 1
+    `;
+    pending = rows[0] ?? null;
+  } else if (fromUserId) {
+    const rows = await prisma.$queryRaw<FriendRequestRow[]>`
+      SELECT id, from_user_id, to_user_id, status
+      FROM friend_requests
+      WHERE from_user_id = ${fromUserId} AND to_user_id = ${uid} AND status = 'pending'
+      LIMIT 1
+    `;
+    pending = rows[0] ?? null;
+  } else {
     // fromUsername
-    const user =
-      (await prisma.user.findFirst({
-        where: { username: fromUsername ?? "" },
-        select: { id: true },
-      })) ?? null;
-    if (!user) return null;
-    return prisma.friendRequest.findFirst({
-      where: { fromUserId: user.id, toUserId: uid, status: "pending" },
-      select: { id: true, fromUserId: true, toUserId: true, status: true },
-    });
-  })();
+    const users = await prisma.$queryRaw<IdRow[]>`
+      SELECT id FROM users WHERE LOWER(username) = LOWER(${fromUsername ?? ""}) LIMIT 1
+    `;
+    const src = users[0]?.id ?? null;
+    if (src) {
+      const rows = await prisma.$queryRaw<FriendRequestRow[]>`
+        SELECT id, from_user_id, to_user_id, status
+        FROM friend_requests
+        WHERE from_user_id = ${src} AND to_user_id = ${uid} AND status = 'pending'
+        LIMIT 1
+      `;
+      pending = rows[0] ?? null;
+    }
+  }
 
   if (!pending) {
     return json(404, { ok: false, message: "Ingen väntande förfrågan hittades." });
   }
 
-  // Markera som accepterad
-  await prisma.friendRequest.update({
-    where: { id: pending.id },
-    data: { status: "accepted", decidedAt: new Date() },
-  });
+  // 2) Markera som accepterad
+  await prisma.$executeRaw`
+    UPDATE friend_requests
+    SET status = 'accepted', decided_at = NOW()
+    WHERE id = ${pending.id}
+  `;
 
-  // Skapa vänskap i kanonisk ordning (min, max) → undviker dubbletter
-  const a = pending.fromUserId < pending.toUserId ? pending.fromUserId : pending.toUserId;
-  const b = pending.fromUserId < pending.toUserId ? pending.toUserId : pending.fromUserId;
+  // 3) Skapa vänskap kanoniskt (a=min, b=max)
+  const a = pending.from_user_id < pending.to_user_id ? pending.from_user_id : pending.to_user_id;
+  const b = pending.from_user_id < pending.to_user_id ? pending.to_user_id : pending.from_user_id;
 
-  try {
-    // @@id([userId, friendId]) → kompositnyckel 'userId_friendId'
-    await prisma.friendship.upsert({
-      where: { userId_friendId: { userId: a, friendId: b } },
-      create: { userId: a, friendId: b },
-      update: {},
-    });
-  } catch (e) {
-    // Om det redan finns i omvänd ordning och DB har LEAST/GREATEST-unik index kan upsert kasta → ignorera
-    // (Vi vill inte att UI/funktionalitet påverkas av race/dubblett)
-  }
+  await prisma.$executeRaw`
+    INSERT INTO friendships (user_id, friend_id, created_at)
+    VALUES (${a}, ${b}, NOW())
+    ON CONFLICT (user_id, friend_id) DO NOTHING
+  `;
 
   return json(200, { ok: true, friendship: { userId: a, friendId: b } });
 }

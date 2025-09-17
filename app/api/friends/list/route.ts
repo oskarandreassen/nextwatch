@@ -6,73 +6,77 @@ import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import prisma from "@/lib/prisma";
 
-type PublicUser = {
+type Row = {
+  user_id: string;
+  friend_id: string;
+  created_at: Date;
+
+  user_username: string | null;
+  user_display_name: string | null;
+  friend_username: string | null;
+  friend_display_name: string | null;
+};
+
+type FriendDTO = {
   id: string;
-  username: string | null;
-  displayName: string | null;
-};
-
-type PendingInItem = {
-  requestId: string;
-  from: PublicUser;
-};
-
-type PendingOutItem = {
-  requestId: string;
-  to: PublicUser;
-};
-
-function toPublic(u: { id: string; username: string | null; profile: { displayName: string | null } | null }): PublicUser {
-  return {
-    id: u.id,
-    username: u.username,
-    displayName: u.profile?.displayName ?? null,
+  userId: string;
+  friendId: string;
+  createdAt: string;
+  other: {
+    id: string;
+    username: string | null;
+    displayName: string | null;
   };
-}
+};
+
+type Ok = { ok: true; friends: FriendDTO[] };
+type Err = { ok: false; message: string };
 
 export async function GET() {
   const jar = await cookies();
   const uid = jar.get("nw_uid")?.value ?? null;
   if (!uid) {
-    return NextResponse.json({ ok: false, message: "Ingen session." }, { status: 401 });
+    const body: Err = { ok: false, message: "Ingen session." };
+    return NextResponse.json(body, { status: 401 });
   }
 
-  const rows = await prisma.friendship.findMany({
-    where: {
-      OR: [{ requesterId: uid }, { addresseeId: uid }],
-    },
-    select: {
-      id: true,
-      requesterId: true,
-      addresseeId: true,
-      status: true,
-      requester: { select: { id: true, username: true, profile: { select: { displayName: true } } } },
-      addressee: { select: { id: true, username: true, profile: { select: { displayName: true } } } },
-    },
-    orderBy: { createdAt: "desc" },
-    take: 200,
+  const rows = await prisma.$queryRaw<Row[]>`
+    SELECT
+      f.user_id,
+      f.friend_id,
+      f.created_at,
+      u1.username AS user_username,
+      p1.display_name AS user_display_name,
+      u2.username AS friend_username,
+      p2.display_name AS friend_display_name
+    FROM friendships f
+    JOIN users u1 ON u1.id = f.user_id
+    LEFT JOIN profiles p1 ON p1.user_id = f.user_id
+    JOIN users u2 ON u2.id = f.friend_id
+    LEFT JOIN profiles p2 ON p2.user_id = f.friend_id
+    WHERE f.user_id = ${uid} OR f.friend_id = ${uid}
+    ORDER BY f.created_at DESC
+  `;
+
+  const friends: FriendDTO[] = rows.map((r) => {
+    const otherIsFriendSide = r.user_id === uid;
+    const otherId = otherIsFriendSide ? r.friend_id : r.user_id;
+    const otherUsername = otherIsFriendSide ? r.friend_username : r.user_username;
+    const otherDisplay = otherIsFriendSide ? r.friend_display_name : r.user_display_name;
+
+    return {
+      id: `${r.user_id}_${r.friend_id}`,
+      userId: r.user_id,
+      friendId: r.friend_id,
+      createdAt: r.created_at.toISOString(),
+      other: {
+        id: otherId,
+        username: otherUsername,
+        displayName: otherDisplay,
+      },
+    };
   });
 
-  const friends: PublicUser[] = [];
-  const pendingIn: PendingInItem[] = [];
-  const pendingOut: PendingOutItem[] = [];
-
-  for (const r of rows) {
-    if (r.status === "ACCEPTED") {
-      const other = r.requesterId === uid ? r.addressee : r.requester;
-      friends.push(toPublic(other));
-      continue;
-    }
-    if (r.status === "PENDING") {
-      if (r.addresseeId === uid) {
-        pendingIn.push({ requestId: r.id, from: toPublic(r.requester) });
-      } else if (r.requesterId === uid) {
-        pendingOut.push({ requestId: r.id, to: toPublic(r.addressee) });
-      }
-      continue;
-    }
-    // BLOCKED – hoppa över i listan
-  }
-
-  return NextResponse.json({ ok: true, friends, pendingIn, pendingOut }, { status: 200 });
+  const body: Ok = { ok: true, friends };
+  return NextResponse.json(body);
 }
