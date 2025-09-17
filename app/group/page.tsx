@@ -4,7 +4,20 @@ export const dynamic = "force-dynamic";
 
 import { cookies } from "next/headers";
 import prisma from "@/lib/prisma";
-import Client from "./Client";
+import GroupClient from "./GroupClient";
+
+// Dessa typer exporteras för att matcha GroupClient.tsx:s import
+export type PublicMember = {
+  userId: string;
+  username: string | null;
+  displayName: string | null;
+  joinedAt: string; // ISO
+};
+
+export type GroupInitial = {
+  code: string;
+  members: PublicMember[];
+};
 
 type MemberRow = {
   user_id: string;
@@ -13,31 +26,15 @@ type MemberRow = {
   joined_at: Date;
 };
 
-type GroupInfo = {
-  code: string;
-  members: Array<{
-    userId: string;
-    username: string | null;
-    displayName: string | null;
-    joinedAt: string;
-  }>;
-};
-
 export default async function GroupPage() {
   const jar = await cookies();
   const uid = jar.get("nw_uid")?.value ?? null;
   const code = jar.get("nw_group")?.value ?? null;
 
-  // Om inte inloggad → låt klienten hantera redirect/empty state
-  if (!uid) {
-    const empty: GroupInfo = { code: "", members: [] };
-    return <Client initial={empty} />;
-  }
-
-  // Hämta aktiv grupp från cookie om finns; annars visa tom
-  if (!code) {
-    const empty: GroupInfo = { code: "", members: [] };
-    return <Client initial={empty} />;
+  // Om inte inloggad eller ingen aktiv grupp → låt klienten visa tomt state
+  if (!uid || !code) {
+    const empty: GroupInitial = { code: "", members: [] };
+    return <GroupClient initial={empty} />;
   }
 
   const rows = await prisma.$queryRaw<MemberRow[]>`
@@ -49,7 +46,7 @@ export default async function GroupPage() {
     ORDER BY gm.joined_at ASC
   `;
 
-  const initial: GroupInfo = {
+  const initial: GroupInitial = {
     code,
     members: rows.map((r) => ({
       userId: r.user_id,
@@ -59,5 +56,5 @@ export default async function GroupPage() {
     })),
   };
 
-  return <Client initial={initial} />;
+  return <GroupClient initial={initial} />;
 }

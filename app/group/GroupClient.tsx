@@ -1,14 +1,36 @@
+// app/group/GroupClient.tsx
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { GroupInitial, PublicMember } from "./page";
+import { useEffect, useRef, useState } from "react";
+import type { GroupInitial as BaseGroupInitial, PublicMember as BasePublicMember } from "./page";
 
+/** UI-hjälpare */
+function classNames(...xs: string[]): string {
+  return xs.filter(Boolean).join(" ");
+}
+
+/** Utöka server-typer lokalt (utan att kräva serverändringar) */
+type PublicMember = BasePublicMember & {
+  /** valfri – om servern inte skickar providers så renderar vi bara inget */
+  providers?: string[];
+};
+
+type GroupInitial = BaseGroupInitial & {
+  /** valfri – om servern inte skickar region så visar vi “—” */
+  region?: string;
+};
+
+/** API-typer (klientens tolkning) */
 type ApiOk = { ok: true };
 type ApiErr = { ok: false; message?: string };
 type Api<T> = (ApiOk & T) | ApiErr;
 
-type MembersResp = {
-  group: { code: string; region: string };
+type MembersRespNew = {
+  code: string;
+  members: PublicMember[];
+};
+type MembersRespLegacy = {
+  group: { code: string; region?: string };
   members: PublicMember[];
 };
 
@@ -20,8 +42,6 @@ type SearchUser = {
   displayName: string | null;
   status: SearchStatus;
 };
-
-type SearchResp = { users: SearchUser[] };
 
 type FriendsListUser = {
   id: string;
@@ -37,11 +57,11 @@ type FriendsListResp = {
 
 type RequestResp = { status: "PENDING_OUT" | "ACCEPTED" };
 
-function classNames(...xs: string[]): string {
-  return xs.filter(Boolean).join(" ");
-}
+/** ---- API-kall (toleranta mot olika svar) ---- */
 
-async function getMembers(code: string | null): Promise<Api<MembersResp>> {
+async function getMembers(code: string | null): Promise<
+  Api<{ code: string; region?: string; members: PublicMember[] }>
+> {
   const url = code ? `/api/group/members?code=${encodeURIComponent(code)}` : "/api/group/members";
   const res = await fetch(url, { cache: "no-store" });
   if (!res.ok) {
@@ -49,14 +69,32 @@ async function getMembers(code: string | null): Promise<Api<MembersResp>> {
     try {
       const body = (await res.json()) as { message?: string };
       if (body?.message) message = body.message;
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
     return { ok: false, message };
   }
-  const data = (await res.json()) as Api<MembersResp>;
-  return data;
+
+  // Kan vara { ok, code, members } eller { ok, group:{code,region}, members }
+  const raw = (await res.json()) as Api<MembersRespNew | MembersRespLegacy>;
+  if (!raw.ok) return raw;
+
+  // Normalisera
+  if ("code" in raw) {
+    return { ok: true, code: raw.code, members: (raw.members ?? []) as PublicMember[] };
+  }
+  // legacy
+  return {
+    ok: true,
+    code: raw.group.code,
+    region: raw.group.region,
+    members: (raw.members ?? []) as PublicMember[],
+  };
 }
 
-async function createGroup(name?: string): Promise<Api<{ group: { code: string } }>> {
+async function createGroup(
+  name?: string
+): Promise<Api<{ code: string }>> {
   const res = await fetch("/api/group/create", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -67,13 +105,23 @@ async function createGroup(name?: string): Promise<Api<{ group: { code: string }
     try {
       const body = (await res.json()) as { message?: string };
       if (body?.message) message = body.message;
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
     return { ok: false, message };
   }
-  return (await res.json()) as Api<{ group: { code: string } }>;
+  const data = (await res.json()) as unknown;
+  // Stöd både { ok, code } och { ok, group:{code} }
+  if (typeof data === "object" && data && "ok" in data) {
+    const d = data as { ok: boolean; code?: string; group?: { code?: string } };
+    if (!d.ok) return { ok: false, message: "Ett fel uppstod." };
+    const code = d.code ?? d.group?.code ?? "";
+    return { ok: true, code };
+  }
+  return { ok: false, message: "Oväntat svar från servern." };
 }
 
-async function joinGroup(code: string): Promise<Api<{ group: { code: string } }>> {
+async function joinGroup(code: string): Promise<Api<{ code: string }>> {
   const res = await fetch("/api/group/join", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -84,10 +132,16 @@ async function joinGroup(code: string): Promise<Api<{ group: { code: string } }>
     try {
       const body = (await res.json()) as { message?: string };
       if (body?.message) message = body.message;
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
     return { ok: false, message };
   }
-  return (await res.json()) as Api<{ group: { code: string } }>;
+  const data = (await res.json()) as unknown;
+  const d = data as { ok: boolean; code?: string; group?: { code?: string } };
+  if (!d.ok) return { ok: false, message: "Ett fel uppstod." };
+  const normalized = d.code ?? d.group?.code ?? "";
+  return { ok: true, code: normalized };
 }
 
 async function leaveGroup(code: string): Promise<ApiOk | ApiErr> {
@@ -101,13 +155,15 @@ async function leaveGroup(code: string): Promise<ApiOk | ApiErr> {
     try {
       const body = (await res.json()) as { message?: string };
       if (body?.message) message = body.message;
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
     return { ok: false, message };
   }
   return (await res.json()) as ApiOk | ApiErr;
 }
 
-async function friendsSearch(q: string): Promise<Api<SearchResp>> {
+async function friendsSearch(q: string): Promise<Api<{ users: SearchUser[] }>> {
   const url = `/api/friends/search?q=${encodeURIComponent(q)}`;
   const res = await fetch(url, { cache: "no-store" });
   if (!res.ok) {
@@ -115,10 +171,26 @@ async function friendsSearch(q: string): Promise<Api<SearchResp>> {
     try {
       const body = (await res.json()) as { message?: string };
       if (body?.message) message = body.message;
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
     return { ok: false, message };
   }
-  return (await res.json()) as Api<SearchResp>;
+  // Server returnerar { ok, results: [...] } med fält: id, username, display_name, is_friend
+  const data = (await res.json()) as
+    | { ok: true; results: Array<{ id: string; username: string | null; display_name: string | null; is_friend: boolean }> }
+    | ApiErr;
+
+  if ("ok" in data && data.ok) {
+    const users: SearchUser[] = data.results.map((r) => ({
+      id: r.id,
+      username: r.username,
+      displayName: r.display_name,
+      status: r.is_friend ? "ACCEPTED" : "NONE",
+    }));
+    return { ok: true, users };
+  }
+  return data as ApiErr;
 }
 
 async function friendsList(): Promise<Api<FriendsListResp>> {
@@ -128,27 +200,45 @@ async function friendsList(): Promise<Api<FriendsListResp>> {
     try {
       const body = (await res.json()) as { message?: string };
       if (body?.message) message = body.message;
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
     return { ok: false, message };
   }
-  return (await res.json()) as Api<FriendsListResp>;
+  // Server returnerar { ok, friends: [...] }
+  const base = (await res.json()) as { ok: true; friends: FriendsListUser[] } | ApiErr;
+  if ("ok" in base && base.ok) {
+    return {
+      ok: true,
+      friends: base.friends,
+      pendingIn: [],
+      pendingOut: [],
+    };
+  }
+  return base as ApiErr;
 }
 
 async function friendRequestById(userId: string): Promise<Api<RequestResp>> {
+  // Server-API tar emot toUserId (inte userId)
   const res = await fetch("/api/friends/request", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ userId }),
+    body: JSON.stringify({ toUserId: userId }),
   });
   if (!res.ok) {
     let message = "Kunde inte skicka förfrågan.";
     try {
       const body = (await res.json()) as { message?: string };
       if (body?.message) message = body.message;
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
     return { ok: false, message };
   }
-  return (await res.json()) as Api<RequestResp>;
+  // Servern svarar { ok, requestId } – mappa till status = 'PENDING_OUT'
+  const data = (await res.json()) as { ok: true; requestId: string } | ApiErr;
+  if ("ok" in data && data.ok) return { ok: true, status: "PENDING_OUT" };
+  return data as ApiErr;
 }
 
 async function acceptFriend(requestId: string): Promise<ApiOk | ApiErr> {
@@ -162,18 +252,24 @@ async function acceptFriend(requestId: string): Promise<ApiOk | ApiErr> {
     try {
       const body = (await res.json()) as { message?: string };
       if (body?.message) message = body.message;
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
     return { ok: false, message };
   }
   return (await res.json()) as ApiOk | ApiErr;
 }
 
+/** ---- Komponent ---- */
+
 export default function GroupClient({ initial }: { initial: GroupInitial }) {
   const [tab, setTab] = useState<"group" | "friends">("group");
 
   const [code, setCode] = useState<string | null>(initial.code);
-  const [region] = useState<string>(initial.region);
-  const [members, setMembers] = useState<PublicMember[]>(initial.members);
+  const [region, setRegion] = useState<string | undefined>(initial.region);
+  const [members, setMembers] = useState<PublicMember[]>(
+    Array.isArray(initial.members) ? initial.members.map((m) => ({ ...m })) : []
+  );
 
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<boolean>(false);
@@ -188,10 +284,10 @@ export default function GroupClient({ initial }: { initial: GroupInitial }) {
   const [results, setResults] = useState<SearchUser[]>([]);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const active = useMemo(() => Boolean(code), [code]);
+  const active = Boolean(code);
 
+  // Ladda friends-listan när man går in på fliken
   useEffect(() => {
-    // Ladda friends-listan direkt när man går in på fliken
     if (tab !== "friends") return;
     (async () => {
       const resp = await friendsList();
@@ -206,11 +302,11 @@ export default function GroupClient({ initial }: { initial: GroupInitial }) {
   }, [tab]);
 
   const refreshMembers = async () => {
-    const c = code;
-    if (!c) return;
-    const data = await getMembers(c);
+    if (!code) return;
+    const data = await getMembers(code);
     if (data.ok) {
-      setMembers(data.members);
+      setMembers(Array.isArray(data.members) ? data.members : []);
+      setRegion(data.region);
     } else {
       setError(data.message ?? "Ett fel uppstod.");
     }
@@ -222,7 +318,7 @@ export default function GroupClient({ initial }: { initial: GroupInitial }) {
     const resp = await createGroup(name);
     setBusy(false);
     if (resp.ok) {
-      setCode(resp.group.code);
+      setCode(resp.code);
       await refreshMembers();
     } else {
       setError(resp.message ?? "Ett fel uppstod.");
@@ -240,7 +336,7 @@ export default function GroupClient({ initial }: { initial: GroupInitial }) {
     const resp = await joinGroup(joinCode);
     setBusy(false);
     if (resp.ok) {
-      setCode(resp.group.code);
+      setCode(resp.code);
       await refreshMembers();
     } else {
       setError(resp.message ?? "Ett fel uppstod.");
@@ -248,15 +344,15 @@ export default function GroupClient({ initial }: { initial: GroupInitial }) {
   };
 
   const handleLeave = async () => {
-    const c = code;
-    if (!c) return;
+    if (!code) return;
     setBusy(true);
     setError(null);
-    const resp = await leaveGroup(c);
+    const resp = await leaveGroup(code);
     setBusy(false);
     if (resp.ok) {
       setCode(null);
       setMembers([]);
+      setRegion(undefined);
     } else {
       setError(resp.message ?? "Ett fel uppstod.");
     }
@@ -275,9 +371,7 @@ export default function GroupClient({ initial }: { initial: GroupInitial }) {
     const resp = await friendRequestById(userId);
     if (!resp.ok) {
       setError(resp.message ?? "Kunde inte lägga till vän.");
-      return;
     }
-    // Visa feedback lokalt: inget serverkrav här
   };
 
   // Debounced search
@@ -324,6 +418,7 @@ export default function GroupClient({ initial }: { initial: GroupInitial }) {
         </button>
       </div>
 
+      {/* Error */}
       {error && (
         <div className="mb-4 rounded-lg bg-red-500/10 px-3 py-2 text-sm text-red-400">
           {error}
@@ -341,7 +436,7 @@ export default function GroupClient({ initial }: { initial: GroupInitial }) {
                   <div className="text-xl font-semibold">
                     Code: <span className="font-mono tracking-widest">{code}</span>
                   </div>
-                  <div className="text-xs text-neutral-500">Region: {region}</div>
+                  <div className="text-xs text-neutral-500">Region: {region ?? "—"}</div>
                 </div>
                 <div className="flex gap-2">
                   <button
@@ -374,26 +469,26 @@ export default function GroupClient({ initial }: { initial: GroupInitial }) {
                   <ul className="space-y-2">
                     {members.map((m) => (
                       <li
-                        key={m.id}
+                        key={m.userId}
                         className="flex items-center justify-between rounded-xl border border-neutral-800 bg-neutral-950/40 px-3 py-2"
                       >
                         <div className="min-w-0">
                           <div className="truncate font-medium">
                             {m.displayName ?? m.username ?? "Okänd"}
                           </div>
-                          {m.providers.length > 0 && (
+                          {m.providers?.length ? (
                             <div className="mt-1 flex flex-wrap gap-1 text-xs text-neutral-400">
-                              {m.providers.map((p) => (
-                                <span key={`${m.id}-${p}`} className="rounded bg-neutral-800 px-2 py-0.5">
+                              {m.providers.map((p: string) => (
+                                <span key={`${m.userId}-${p}`} className="rounded bg-neutral-800 px-2 py-0.5">
                                   {p}
                                 </span>
                               ))}
                             </div>
-                          )}
+                          ) : null}
                         </div>
                         <div className="flex items-center gap-2">
                           <button
-                            onClick={() => quickAdd(m.id)}
+                            onClick={() => quickAdd(m.userId)}
                             className="rounded-xl border border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-800"
                             title="Add friend"
                           >
@@ -473,7 +568,10 @@ export default function GroupClient({ initial }: { initial: GroupInitial }) {
                   <h4 className="mb-2 font-medium">Incoming</h4>
                   <ul className="space-y-2">
                     {pendingIn.map((r) => (
-                      <li key={r.requestId} className="flex items-center justify-between rounded-xl border border-neutral-800 bg-neutral-950/40 px-3 py-2">
+                      <li
+                        key={r.requestId}
+                        className="flex items-center justify-between rounded-xl border border-neutral-800 bg-neutral-950/40 px-3 py-2"
+                      >
                         <div className="truncate">
                           {r.from.displayName ?? r.from.username ?? "Okänd"}
                         </div>
@@ -504,7 +602,10 @@ export default function GroupClient({ initial }: { initial: GroupInitial }) {
                   <h4 className="mb-2 font-medium">Outgoing</h4>
                   <ul className="space-y-2">
                     {pendingOut.map((r) => (
-                      <li key={r.requestId} className="flex items-center justify-between rounded-xl border border-neutral-800 bg-neutral-950/40 px-3 py-2">
+                      <li
+                        key={r.requestId}
+                        className="flex items-center justify-between rounded-xl border border-neutral-800 bg-neutral-950/40 px-3 py-2"
+                      >
                         <div className="truncate">
                           {r.to.displayName ?? r.to.username ?? "Okänd"}
                         </div>
@@ -524,7 +625,10 @@ export default function GroupClient({ initial }: { initial: GroupInitial }) {
             ) : (
               <ul className="space-y-2">
                 {friends.map((f) => (
-                  <li key={f.id} className="flex items-center justify-between rounded-xl border border-neutral-800 bg-neutral-950/40 px-3 py-2">
+                  <li
+                    key={f.id}
+                    className="flex items-center justify-between rounded-xl border border-neutral-800 bg-neutral-950/40 px-3 py-2"
+                  >
                     <div className="truncate">
                       {f.displayName ?? f.username ?? "Okänd"}
                     </div>
@@ -540,6 +644,7 @@ export default function GroupClient({ initial }: { initial: GroupInitial }) {
   );
 }
 
+/** Join/Create-kort (UI oförändrat) */
 function JoinCard({ onJoin, busy }: { onJoin: (code: string) => void; busy: boolean }) {
   const [code, setCode] = useState<string>("");
 
@@ -570,7 +675,7 @@ function CreateCard({ onCreate, busy }: { onCreate: (name?: string) => void; bus
     <div className="rounded-2xl bg-neutral-900 p-5">
       <h3 className="mb-3 text-lg font-semibold">Create group</h3>
       <input
-        className="mb-3 w-full rounded-xl border border-neutral-700 bg-neutral-800 px-3 py-2 text-neutral-100 outline-none focus:ring-2 focus:ring-violet-600"
+        className="mb-3 w-full rounded-2xl border border-neutral-700 bg-neutral-800 px-3 py-2 text-neutral-100 outline-none focus:ring-2 focus:ring-violet-600"
         placeholder="Group name (optional)…"
         value={name}
         onChange={(e) => setName(e.target.value)}
@@ -578,7 +683,7 @@ function CreateCard({ onCreate, busy }: { onCreate: (name?: string) => void; bus
       <button
         onClick={() => onCreate(name.trim() || undefined)}
         disabled={busy}
-        className="rounded-xl bg-emerald-600 px-4 py-2 text-white hover:bg-emerald-500 disabled:opacity-60"
+        className="rounded-2xl bg-emerald-600 px-4 py-2 text-white hover:bg-emerald-500 disabled:opacity-60"
       >
         Create
       </button>
