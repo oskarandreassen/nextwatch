@@ -1,7 +1,35 @@
 // app/api/profile/route.ts
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import prisma from "../../../lib/prisma";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+function firstAcceptLanguage(h: string | null): string | null {
+  if (!h) return null;
+  const first = h.split(",")[0]?.trim();
+  return first || null;
+}
+
+async function inferRegionAndLocale(): Promise<{ region: string; locale: string }> {
+  const jar = await cookies();
+  const hdr = await headers();
+  const ipCountry = hdr.get("x-vercel-ip-country");
+  const acceptLang = firstAcceptLanguage(hdr.get("accept-language"));
+
+  const region =
+    jar.get("nw_region")?.value ||
+    (ipCountry && /^[A-Z]{2}$/.test(ipCountry) ? ipCountry : null) ||
+    "SE";
+
+  const locale =
+    jar.get("nw_locale")?.value ||
+    (acceptLang && /^[a-z]{2}(-[A-Z]{2})?$/.test(acceptLang) ? acceptLang : null) ||
+    "sv-SE";
+
+  return { region, locale };
+}
 
 export async function GET() {
   const cookieStore = await cookies();
@@ -17,47 +45,63 @@ export async function PUT(req: Request) {
   const uid = cookieStore.get("nw_uid")?.value || null;
   if (!uid) return NextResponse.json({ ok: false, error: "No session" }, { status: 401 });
 
-  const body = await req.json().catch(() => ({}));
-  const {
-    region, locale, uiLanguage, providers, dob, yearPreference, recycleAfterDays, displayName,
-  } = body as Partial<{
-    region: string; locale: string; uiLanguage: string; providers: unknown;
-    dob: string; yearPreference: string; recycleAfterDays: number; displayName: string | null;
-  }>;
+  const body = (await req.json()) as Record<string, unknown>;
 
-  // se till att User finns (din User.id saknar default)
-  await prisma.user.upsert({
-    where: { id: uid },
-    update: {},
-    create: { id: uid, plan: "free" },
-  });
+  const asStringArray = (x: unknown): string[] => (Array.isArray(x) ? x.filter((v): v is string => typeof v === "string") : []);
+  const asString = (x: unknown): string | null => (typeof x === "string" && x.trim() !== "" ? x.trim() : null);
 
-  const profile = await prisma.profile.upsert({
-    where: { userId: uid },
-    update: {
-      region: region ?? undefined,
-      locale: locale ?? undefined,
-      uiLanguage: uiLanguage ?? undefined,
-      providers: providers ?? undefined,
-      dob: dob ? new Date(dob) : undefined,
-      yearPreference: yearPreference ?? undefined,
-      recycleAfterDays: typeof recycleAfterDays === "number" ? recycleAfterDays : undefined,
-      displayName: typeof displayName === "string" ? (displayName || null) : undefined,
-      updatedAt: new Date(),
-    },
-    create: {
+  const displayName = asString(body.displayName);
+  const dobStr = asString(body.dob); // kan vara null -> vi sätter bara om det finns
+  const favoriteGenres = asStringArray(body.favoriteGenres);
+  const dislikedGenres = asStringArray(body.dislikedGenres);
+  const providers = asStringArray(body.providers);
+
+  const { region, locale } = await inferRegionAndLocale();
+  const uiLanguageRaw = asString(body.uiLanguage);
+  const uiLanguage = uiLanguageRaw ? uiLanguageRaw : (locale.split("-")[0] || "sv");
+
+  // Finns profil → UPDATE; annars CREATE (kräver dob & displayName)
+  const existing = await prisma.profile.findUnique({ where: { userId: uid } });
+
+  if (existing) {
+    const updated = await prisma.profile.update({
+      where: { userId: uid },
+      data: {
+        displayName: typeof displayName === "string" ? displayName : undefined,
+        dob: dobStr ? new Date(dobStr) : undefined, // ❗️bara sätta om given
+        region,
+        locale,
+        uiLanguage,
+        favoriteGenres,
+        dislikedGenres,
+        providers,
+        updatedAt: new Date(),
+      },
+    });
+    return NextResponse.json({ ok: true, profile: updated });
+  }
+
+  if (!displayName || !dobStr) {
+    return NextResponse.json(
+      { ok: false, error: "displayName och dob krävs för att skapa profilen." },
+      { status: 400 }
+    );
+  }
+
+  const created = await prisma.profile.create({
+    data: {
       userId: uid,
-      region: region ?? "SE",
-      locale: locale ?? "sv-SE",
-      uiLanguage: uiLanguage ?? "sv",
-      providers: providers ?? "[]",
-      dob: dob ? new Date(dob) : new Date("2000-01-01"),
-      yearPreference: yearPreference ?? "all",
-      recycleAfterDays: typeof recycleAfterDays === "number" ? recycleAfterDays : 14,
-      displayName: typeof displayName === "string" ? (displayName || null) : null,
+      displayName,
+      dob: new Date(dobStr), // ✅ obligatoriskt i create om din schema kräver det
+      region,
+      locale,
+      uiLanguage,
+      favoriteGenres,
+      dislikedGenres,
+      providers,
       updatedAt: new Date(),
     },
   });
 
-  return NextResponse.json({ ok: true, profile });
+  return NextResponse.json({ ok: true, profile: created });
 }
