@@ -7,7 +7,7 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL") // Neon: måste vara satt i Vercel env
+  url      = env("DATABASE_URL") // Neon
 }
 
 // ========== ENUMS ==========
@@ -31,9 +31,9 @@ enum FriendRequestStatus {
 
 // ========== MODELS ==========
 model User {
-  id            String   @id
+  id            String    @id
   email         String?
-  username      String?  @unique
+  username      String?   @unique
   emailVerified DateTime? @map("email_verified")
   passwordHash  String?   @map("password_hash")
   lastLoginAt   DateTime? @map("last_login_at")
@@ -42,23 +42,26 @@ model User {
   createdAt     DateTime  @default(now()) @map("created_at")
 
   // Relations
-  profile       Profile?
-  purchases     Purchase[]
-  groups        Group[]       @relation("GroupsCreated")
-  groupMembers  GroupMember[]
-  groupVotes    GroupVote[]
-  ratings       Rating[]
-  watchlist     Watchlist[]
-  sentRequests  FriendRequest[] @relation("FromUser")
-  recvRequests  FriendRequest[] @relation("ToUser")
-  friendships   Friendship[]    @relation("UserFriendships")
+  profile            Profile?
+  purchases          Purchase[]
+  groups             Group[]         @relation("GroupsCreated")
+  groupMembers       GroupMember[]
+  groupVotes         GroupVote[]
+  ratings            Rating[]
+  watchlist          Watchlist[]
+  sentRequests       FriendRequest[] @relation("FromUser")
+  recvRequests       FriendRequest[] @relation("ToUser")
+
+  // Vänskap – två sidor med OLIKA relationsnamn (krav i Prisma)
+  friendshipsAsUser  Friendship[]    @relation("FriendshipUser")
+  friendshipsAsFriend Friendship[]   @relation("FriendshipFriend")
 
   @@map("users")
 }
 
 model Profile {
-  userId            String  @id @map("user_id")
-  user              User    @relation(fields: [userId], references: [id])
+  userId            String   @id @map("user_id")
+  user              User     @relation(fields: [userId], references: [id])
 
   displayName       String?  @map("display_name")
   dob               DateTime? @db.Date
@@ -67,7 +70,7 @@ model Profile {
   recycleAfterDays  Int       @default(14)      @map("recycle_after_days")
   region            String    @default("SE")
   locale            String    @default("sv-SE")
-  providers         Json      @default("[]")
+  providers         Json      // DB har DEFAULT '[]'::jsonb – behåll default i SQL, inte här
   favoriteMovie     Json?     @map("favorite_movie")
   favoriteShow      Json?     @map("favorite_show")
   favoriteGenres    String[]  @default([])
@@ -152,8 +155,7 @@ model FriendRequest {
   createdAt  DateTime @default(now()) @map("created_at")
   decidedAt  DateTime? @map("decided_at")
 
-  // Viktigt: Postgres-partial UNIQUE (status='pending') hanteras i SQL-migrationen.
-  // Sätt INTE @@unique här – det skulle skärpa till alla statuslägen.
+  // Partial UNIQUE (status='pending') och extra index finns i SQL-migrationen.
   @@index([toUserId], map: "idx_friend_requests_to_pending")
   @@index([fromUserId], map: "idx_friend_requests_from_pending")
   @@map("friend_requests")
@@ -163,24 +165,27 @@ model Friendship {
   userId    String   @map("user_id")
   friendId  String   @map("friend_id")
   createdAt DateTime @default(now()) @map("created_at")
-  user      User     @relation("UserFriendships", fields: [userId], references: [id])
-  friend    User     @relation("UserFriendships", fields: [friendId], references: [id])
+
+  // Två separata relationer med olika namn
+  user      User     @relation("FriendshipUser",   fields: [userId],   references: [id])
+  friend    User     @relation("FriendshipFriend", fields: [friendId], references: [id])
 
   @@id([userId, friendId])
-  // Unika par (LEAST/GREATEST) finns som index i SQL – kan inte uttryckas i Prisma DSL.
+  // Unik LEAST/GREATEST-indexet ligger i SQL (kan ej uttryckas i Prisma DSL)
   @@index([userId], map: "idx_friendships_user")
   @@index([friendId], map: "idx_friendships_friend")
   @@map("friendships")
 }
 
+// OBS: Vi speglar watchlistens unika sammansättning som primärnyckel
+// så vi inte pådyvlar ett "id" om tabellen saknar det.
 model Watchlist {
-  id        String   @id @default(cuid())
-  userId    String   @map("user_id")
-  user      User     @relation(fields: [userId], references: [id])
-  tmdbId    Int      @map("tmdb_id")
-  mediaType String   @map("media_type")
+  userId    String  @map("user_id")
+  tmdbId    Int     @map("tmdb_id")
+  mediaType String  @map("media_type")
+  user      User    @relation(fields: [userId], references: [id])
 
-  @@unique([userId, tmdbId, mediaType], name: "watchlist_user_tmdb_media_unique")
+  @@id([userId, tmdbId, mediaType])
   @@map("watchlist")
 }
 

@@ -2,6 +2,7 @@ import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import LoginCard from './components/auth/LoginCard';
 import HeroReel from './components/landing/HeroReel';
+import { SpeedInsights } from "@vercel/speed-insights/next"
 
 
 import InlineLogin from "./components/auth/InlineLogin";
