@@ -1,149 +1,107 @@
-// prisma/schema.prisma
-generator client {
-  provider = "prisma-client-js"
+enum Vote {
+  LIKE
+  DISLIKE
+  SKIP
 }
 
-datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+enum TmdbType {
+  movie
+  tv
+}
+
+enum FriendRequestStatus {
+  pending
+  accepted
+  declined
+  cancelled
 }
 
 model User {
-  id        String    @id
-  email     String?   @unique
-  plan      String    @default("free")
-  planSince DateTime? @map("plan_since")
-  createdAt DateTime  @default(now()) @map("created_at")
-
-  // Verifiering & login
+  id            String   @id
+  email         String?
+  username      String?  @unique
   emailVerified DateTime? @map("email_verified")
   passwordHash  String?   @map("password_hash")
   lastLoginAt   DateTime? @map("last_login_at")
+  plan          String     @default("free")
+  planSince     DateTime?  @map("plan_since")
+  createdAt     DateTime   @default(now()) @map("created_at")
 
-  // Username för kompis-sök
-  username String? @unique
-
-  profile   Profile?
-  ratings   Rating[]
-  watchlist watchlist[]
-  purchases Purchase[]
-
-  // Groups
-  groupMembers  GroupMember[] @relation("UserGroupMembers")
-  groupsCreated Group[]       @relation("UserGroupsCreated")
-  groupVotes    GroupVote[]   @relation("UserGroupVotes")
-
-  // Friends
-  friendRequestsSent     FriendRequest[] @relation("FriendRequestsSent")
-  friendRequestsReceived FriendRequest[] @relation("FriendRequestsReceived")
-  friendshipsAsUser      Friendship[]    @relation("FriendshipUser")
-  friendshipsAsFriend    Friendship[]    @relation("FriendshipFriend")
-
-  verifications Verification[]
-
-  @@map("users")
+  profile       Profile?
+  purchases     Purchase[]
+  groups        Group[]    @relation("GroupsCreated")
+  groupMembers  GroupMember[]
+  groupVotes    GroupVote[]
+  ratings       Rating[]
+  watchlist     Watchlist[]
+  sentRequests  FriendRequest[] @relation("FromUser")
+  recvRequests  FriendRequest[] @relation("ToUser")
+  friendships   Friendship[]    @relation("UserFriendships")
 }
 
 model Profile {
-  userId           String   @id @map("user_id")
-  dob              DateTime @db.Date
-  uiLanguage       String   @default("sv") @map("ui_language")
-  yearPreference   String   @default("all") @map("year_preference")
-  recycleAfterDays Int      @default(14) @map("recycle_after_days")
-  region           String   @default("SE")
-  locale           String   @default("sv-SE")
-  providers        Json     @default("[]") // Om Prisma klagar på default → ta bort @default här (DB har default).
-  updatedAt        DateTime @default(now()) @map("updated_at")
-
-  // Smakprofil
-  displayName    String?  @map("display_name")
-  favoriteMovie  Json?    @map("favorite_movie") // JSONB
-  favoriteShow   Json?    @map("favorite_show") // JSONB
-  favoriteGenres String[] @default([]) @map("favorite_genres") // text[]
-  dislikedGenres String[] @default([]) @map("disliked_genres") // text[]
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId            String  @id @map("user_id")
+  user              User    @relation(fields: [userId], references: [id])
+  displayName       String? @map("display_name")
+  dob               DateTime? @db.Date
+  uiLanguage        String   @default("sv") @map("ui_language")
+  yearPreference    String   @default("all") @map("year_preference")
+  recycleAfterDays  Int      @default(14) @map("recycle_after_days")
+  region            String   @default("SE")
+  locale            String   @default("sv-SE")
+  providers         Json     @default("[]")
+  favoriteMovie     Json?
+  favoriteShow      Json?
+  favoriteGenres    String[] @default([])
+  dislikedGenres    String[] @default([])
+  updatedAt         DateTime @default(now()) @map("updated_at")
 
   @@map("profiles")
 }
 
 model Verification {
-  token     String   @id
-  userId    String   @map("user_id")
-  email     String
-  name      String?
-  createdAt DateTime @default(now()) @map("created_at")
-  expiresAt DateTime @map("expires_at")
+  token      String  @id
+  userId     String  @map("user_id")
+  user       User    @relation(fields: [userId], references: [id])
+  email      String
+  name       String?
+  createdAt  DateTime @default(now()) @map("created_at")
+  expiresAt  DateTime @map("expires_at")
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([email], map: "idx_verifications_email")
-  @@index([userId], map: "idx_verifications_user_id")
   @@map("verifications")
 }
 
-model Rating {
-  id        String   @id
-  userId    String   @map("user_id")
-  tmdbId    Int      @map("tmdb_id")
-  mediaType String   @map("media_type")
-  decision  String
-  decidedAt DateTime @default(now()) @map("decided_at")
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId, tmdbId, mediaType], map: "idx_ratings_user_tmdb")
-  @@map("ratings")
-}
-
-model watchlist {
-  id        String   @id
-  userId    String   @map("user_id")
-  tmdbId    Int      @map("tmdb_id")
-  mediaType String   @map("media_type")
-  addedAt   DateTime @default(now()) @map("added_at")
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([userId, tmdbId, mediaType])
-  @@map("watchlist")
-}
-
 model Purchase {
-  id                    String   @id
-  userId                String   @map("user_id")
-  stripePaymentIntentId String?  @map("stripe_payment_intent_id")
-  amountTotal           Int      @default(0) @map("amount_total")
-  currency              String   @default("SEK")
-  product               String   @default("lifetime")
+  id                    String  @id
+  userId                String  @map("user_id")
+  user                  User    @relation(fields: [userId], references: [id])
+  stripePaymentIntentId String? @map("stripe_payment_intent_id")
+  amountTotal           Int     @default(0) @map("amount_total")
+  currency              String  @default("SEK")
+  product               String  @default("lifetime")
   createdAt             DateTime @default(now()) @map("created_at")
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, createdAt], map: "idx_purchases_user")
   @@map("purchases")
 }
 
 model Group {
-  code      String   @id
-  createdBy String   @map("created_by")
-  createdAt DateTime @default(now()) @map("created_at")
-
-  members GroupMember[]
-  votes   GroupVote[]   @relation("GroupVotes")
-
-  creator User @relation("UserGroupsCreated", fields: [createdBy], references: [id], onDelete: Cascade)
+  code       String   @id
+  createdBy  String   @map("created_by")
+  creator    User     @relation("GroupsCreated", fields: [createdBy], references: [id])
+  createdAt  DateTime @default(now()) @map("created_at")
+  members    GroupMember[]
+  votes      GroupVote[]
 
   @@map("groups")
 }
 
 model GroupMember {
-  groupCode String   @map("group_code")
-  userId    String   @map("user_id")
+  groupCode String @map("group_code")
+  userId    String @map("user_id")
   joinedAt  DateTime @default(now()) @map("joined_at")
-
-  group Group @relation(fields: [groupCode], references: [code], onDelete: Cascade)
-  user  User  @relation("UserGroupMembers", fields: [userId], references: [id], onDelete: Cascade)
+  group     Group @relation(fields: [groupCode], references: [code])
+  user      User  @relation(fields: [userId], references: [id])
 
   @@id([groupCode, userId])
   @@map("group_members")
@@ -153,39 +111,67 @@ model GroupVote {
   groupCode String   @map("group_code")
   userId    String   @map("user_id")
   tmdbId    Int      @map("tmdb_id")
-  tmdbType  String   @map("tmdb_type") // 'movie' | 'tv' (DB: CHECK)
-  vote      String // 'LIKE' | 'DISLIKE' | 'SKIP' (DB: CHECK)
+  tmdbType  TmdbType @map("tmdb_type")
+  vote      Vote
   decidedAt DateTime @default(now()) @map("decided_at")
 
-  group Group @relation("GroupVotes", fields: [groupCode], references: [code], onDelete: Cascade)
-  user  User  @relation("UserGroupVotes", fields: [userId], references: [id], onDelete: Cascade)
+  group     Group @relation(fields: [groupCode], references: [code])
+  user      User  @relation(fields: [userId], references: [id])
 
   @@id([groupCode, userId, tmdbId, tmdbType])
+  @@index([groupCode, tmdbId, tmdbType], map: "idx_group_votes_group_tmdb")
   @@map("group_votes")
 }
 
 model FriendRequest {
-  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  fromUserId String    @map("from_user_id")
-  toUserId   String    @map("to_user_id")
-  status     String    @default("pending") // pending | accepted | declined | cancelled
-  createdAt  DateTime  @default(now()) @map("created_at")
+  id         String  @id @default(uuid()) @db.Uuid
+  fromUserId String  @map("from_user_id")
+  toUserId   String  @map("to_user_id")
+  fromUser   User    @relation("FromUser", fields: [fromUserId], references: [id])
+  toUser     User    @relation("ToUser", fields: [toUserId], references: [id])
+  status     FriendRequestStatus @default(pending)
+  createdAt  DateTime @default(now()) @map("created_at")
   decidedAt  DateTime? @map("decided_at")
 
-  fromUser User @relation("FriendRequestsSent", fields: [fromUserId], references: [id], onDelete: Cascade)
-  toUser   User @relation("FriendRequestsReceived", fields: [toUserId], references: [id], onDelete: Cascade)
-
+  @@unique([fromUserId, toUserId], name: "idx_friend_requests_pending_unique") // OBS: Postgres-partial i SQL; i Prisma kan vi spegla logiken i app-lager eller via native migration.
+  @@index([toUserId], map: "idx_friend_requests_to_pending")
+  @@index([fromUserId], map: "idx_friend_requests_from_pending")
   @@map("friend_requests")
 }
 
 model Friendship {
-  userId    String   @map("user_id")
-  friendId  String   @map("friend_id")
+  userId    String  @map("user_id")
+  friendId  String  @map("friend_id")
   createdAt DateTime @default(now()) @map("created_at")
-
-  user   User @relation("FriendshipUser", fields: [userId], references: [id], onDelete: Cascade)
-  friend User @relation("FriendshipFriend", fields: [friendId], references: [id], onDelete: Cascade)
+  user      User    @relation("UserFriendships", fields: [userId], references: [id])
+  friend    User    @relation("UserFriendships", fields: [friendId], references: [id])
 
   @@id([userId, friendId])
+  // Unik parindex (LEAST/GREATEST) finns i SQL; speglas via migration snarare än Prisma DSL.
+  @@index([userId], map: "idx_friendships_user")
+  @@index([friendId], map: "idx_friendships_friend")
   @@map("friendships")
+}
+
+model Watchlist {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  user      User     @relation(fields: [userId], references: [id])
+  tmdbId    Int      @map("tmdb_id")
+  mediaType String   @map("media_type")
+
+  @@unique([userId, tmdbId, mediaType], name: "watchlist_user_tmdb_media_unique")
+  @@map("watchlist")
+}
+
+model Rating {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  user      User     @relation(fields: [userId], references: [id])
+  tmdbId    Int      @map("tmdb_id")
+  mediaType String   @map("media_type")
+  value     Int
+
+  @@index([userId, tmdbId, mediaType], map: "idx_ratings_user_tmdb")
+  @@map("ratings")
 }
