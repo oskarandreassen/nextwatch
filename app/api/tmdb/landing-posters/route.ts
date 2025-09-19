@@ -13,14 +13,12 @@ type TmdbItem = {
   first_air_date?: string;
   poster_path: string | null;
 };
-
 type TmdbResponse = { results: TmdbItem[] };
 
 function pick<T>(v: T | null | undefined, fallback: T): T {
   return v == null ? fallback : v;
 }
-
-function getImageBase(size: "w342" | "w500" | "original" = "w342"): string {
+function getImageBase(size: "w185" | "w342" | "w500" | "original" = "w185"): string {
   return `https://image.tmdb.org/t/p/${size}`;
 }
 
@@ -34,9 +32,7 @@ async function resolveRegionLocale(): Promise<{ region: string; locale: string }
   const regionCookie = c.get("nw_region")?.value ?? null;
   const localeCookie = c.get("nw_locale")?.value ?? null;
 
-  const region =
-    regionCookie || (/^[A-Z]{2}$/.test(ipCountry) ? ipCountry : "SE");
-
+  const region = regionCookie || (/^[A-Z]{2}$/.test(ipCountry) ? ipCountry : "SE");
   const locale =
     localeCookie ||
     (/^[a-z]{2}(-[A-Z]{2})?$/.test(accept) ? accept : "sv-SE");
@@ -44,10 +40,7 @@ async function resolveRegionLocale(): Promise<{ region: string; locale: string }
   return { region, locale };
 }
 
-async function tmdbFetch(
-  path: string,
-  params: Record<string, string | number>
-): Promise<TmdbResponse> {
+async function tmdbFetch(path: string, params: Record<string, string | number>): Promise<TmdbResponse> {
   const apiKey = process.env.TMDB_API_KEY;
   const v4 = process.env.TMDB_v4_TOKEN;
 
@@ -60,11 +53,8 @@ async function tmdbFetch(
     headers: v4 ? { Authorization: `Bearer ${v4}` } : undefined,
     next: { revalidate: 60 * 15 },
   });
-  if (!res.ok) {
-    throw new Error(`TMDB error ${res.status} on ${path}`);
-  }
-  const data = (await res.json()) as TmdbResponse;
-  return data;
+  if (!res.ok) throw new Error(`TMDB error ${res.status} on ${path}`);
+  return (await res.json()) as TmdbResponse;
 }
 
 export async function GET() {
@@ -79,7 +69,7 @@ export async function GET() {
     tmdbFetch("/tv/popular", { region, language: locale, page: 1 }),
   ]);
 
-  const base = getImageBase("w342");
+  const base = getImageBase("w185"); // mindre posters → bättre LCP
 
   const posters = [...trending.results, ...popularMovies.results, ...popularTv.results]
     .filter((x) => x && x.poster_path)
@@ -90,11 +80,10 @@ export async function GET() {
       src: `${base}${x.poster_path}`,
     }));
 
-  // Dedupe per id och begränsa
   const unique = new Map<number, { id: number; title: string; year: string; src: string }>();
   for (const p of posters) {
     if (!unique.has(p.id)) unique.set(p.id, p);
-    if (unique.size >= 30) break;
+    if (unique.size >= 24) break; // färre initialt → snabbare första render
   }
 
   return NextResponse.json({ ok: true, posters: Array.from(unique.values()) });

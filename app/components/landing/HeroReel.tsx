@@ -1,21 +1,21 @@
-// app/components/landing/HeroReel.tsx
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
 
 type Poster = { id: number; title: string; year: string; src: string };
 
 type Props = {
-  /** Lägre värde = snabbare scroll. Default 16000ms för ett helt varv. */
+  /** Högre värde = långsammare. Default 24000ms (halverad hastighet mot tidigare). */
   durationMs?: number;
-  /** Extra klasser för positionering i sidan */
   className?: string;
 };
 
-/** Minimal, sömlös poster-reel för landing. */
-export default function HeroReel({ durationMs = 16000, className }: Props) {
+/** Sömlös poster-reel med “starta-först-när-laddad”-logik. */
+export default function HeroReel({ durationMs = 24000, className }: Props) {
   const [items, setItems] = useState<Poster[]>([]);
+  const [loadedCount, setLoadedCount] = useState(0);
+  const marked = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     let on = true;
@@ -26,7 +26,7 @@ export default function HeroReel({ durationMs = 16000, className }: Props) {
         const data = (await res.json()) as { ok?: boolean; posters?: Poster[] };
         if (on && data?.ok && data.posters) setItems(data.posters);
       } catch {
-        // tyst fail
+        /* ignore */
       }
     })();
     return () => {
@@ -36,8 +36,8 @@ export default function HeroReel({ durationMs = 16000, className }: Props) {
 
   // Duplicera listan för ändlös loop
   const loop = items.length > 0 ? [...items, ...items] : [];
+  const ready = loadedCount >= Math.min(6, items.length); // börja animera när minst 6 är klara
 
-  // Bas-fallback om en enstaka bild fallerar vid client-render
   const fallback =
     "data:image/svg+xml;utf8," +
     encodeURIComponent(
@@ -46,10 +46,12 @@ export default function HeroReel({ durationMs = 16000, className }: Props) {
 
   return (
     <div className={["relative h-[280px] sm:h-[340px] md:h-[420px] w-full overflow-hidden", className].filter(Boolean).join(" ")}>
-      {/* rullband */}
       <div
         className="absolute left-0 top-0 flex h-full w-max items-center gap-4 will-change-transform"
-        style={{ animation: `nw-reel ${Math.max(6000, durationMs)}ms linear infinite` }}
+        style={{
+          animation: `nw-reel ${Math.max(6000, durationMs)}ms linear infinite`,
+          animationPlayState: ready ? "running" : "paused",
+        }}
         aria-hidden
       >
         {loop.map((p, i) => (
@@ -57,6 +59,7 @@ export default function HeroReel({ durationMs = 16000, className }: Props) {
             key={`${p.id}-${i}`}
             className="relative h-[85%] w-[150px] sm:w-[180px] md:w-[210px] shrink-0 overflow-hidden rounded-2xl border border-white/10 bg-white/5 shadow-lg"
             title={p.title}
+            draggable={false}
           >
             <Image
               src={p.src}
@@ -64,20 +67,25 @@ export default function HeroReel({ durationMs = 16000, className }: Props) {
               fill
               sizes="(max-width: 640px) 150px, (max-width: 768px) 180px, 210px"
               className="object-cover"
+              priority={i < 2}                 // prioritera bara de första
+              fetchPriority={i < 2 ? "high" : "low"}
               onError={(e) => {
-                // säkerställ att inga svarta rutor visas
                 const el = e.currentTarget as HTMLImageElement & { src: string };
                 if (el && el.src !== fallback) el.src = fallback;
               }}
-              priority={i < 8}
+              onLoadingComplete={() => {
+                const key = `${p.id}-${i}`;
+                if (!marked.current.has(key)) {
+                  marked.current.add(key);
+                  setLoadedCount((c) => c + 1);
+                }
+              }}
             />
-            {/* liten edge-glow */}
             <div className="pointer-events-none absolute inset-0 bg-gradient-to-tr from-white/0 via-white/0 to-white/5" />
           </div>
         ))}
       </div>
 
-      {/* mask/gradienter för mjukare kanter och läsbar hero */}
       <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/40 via-black/20 to-black/60" />
       <style jsx>{`
         @keyframes nw-reel {
