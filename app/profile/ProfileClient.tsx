@@ -11,7 +11,6 @@ export type FavoriteItem = {
   poster?: string | null;
 };
 
-// Tillåt undefined här så den matchar serverns (page.tsx) DTO exakt.
 export type ProfileDTO = {
   displayName: string | null;
   dob: string | null;            // ISO yyyy-mm-dd
@@ -19,8 +18,8 @@ export type ProfileDTO = {
   locale: string | null;
   uiLanguage: string | null;     // 'sv' | 'en' | ...
   favoriteGenres: string[];
-  favoriteMovie?: FavoriteItem | null; // <- optional
-  favoriteShow?: FavoriteItem | null;  // <- optional
+  favoriteMovie?: FavoriteItem | null;
+  favoriteShow?: FavoriteItem | null;
 };
 
 type Props = {
@@ -29,28 +28,111 @@ type Props = {
 
 type Fav = FavoriteItem | null;
 
-const ALL_LANGS: { code: string; label: string }[] = [
-  { code: 'sv', label: 'Svenska' },
-  { code: 'en', label: 'English' },
-];
-
-const ALL_GENRES = [
-  'Action', 'Adventure', 'Animation', 'Comedy', 'Crime', 'Documentary', 'Drama',
-  'Family', 'Fantasy', 'History', 'Horror', 'Music', 'Mystery', 'Romance',
-  'Science Fiction', 'TV Movie', 'Thriller', 'War', 'Western'
-] as const;
-
+// —————————————————————————————————————————————
+// Providers: canonical IDs <-> display-names (sv)
+// —————————————————————————————————————————————
 const PROVIDERS = [
-  { id: 'netflix', label: 'Netflix' },
-  { id: 'disney-plus', label: 'Disney+' },
-  { id: 'prime-video', label: 'Prime Video' },
-  { id: 'max', label: 'Max' },
-  { id: 'viaplay', label: 'Viaplay' },
+  { id: 'netflix',       label: 'Netflix' },
+  { id: 'disney-plus',   label: 'Disney+' },
+  { id: 'prime-video',   label: 'Prime Video' },
+  { id: 'max',           label: 'Max' },
+  { id: 'viaplay',       label: 'Viaplay' },
   { id: 'apple-tv-plus', label: 'Apple TV+' },
-  { id: 'skyshowtime', label: 'SkyShowtime' },
-  { id: 'svt-play', label: 'SVT Play' },
-  { id: 'tv4-play', label: 'TV4 Play' },
+  { id: 'skyshowtime',   label: 'SkyShowtime' },
+  { id: 'svt-play',      label: 'SVT Play' },
+  { id: 'tv4-play',      label: 'TV4 Play' },
 ] as const;
+
+type ProviderId = (typeof PROVIDERS)[number]['id'];
+
+const ID_TO_LABEL: Record<ProviderId, string> = Object.fromEntries(
+  PROVIDERS.map(p => [p.id, p.label] as const)
+) as Record<ProviderId, string>;
+
+// Synonymer (case-insensitive) → id
+const LABEL_TO_ID: Record<string, ProviderId> = (() => {
+  const base: Record<string, ProviderId> = {};
+  const add = (name: string, id: ProviderId) => { base[name.toLowerCase()] = id; };
+  for (const p of PROVIDERS) add(p.label, p.id);
+  // vanliga varianter
+  add('disney plus', 'disney-plus');
+  add('amazon prime video', 'prime-video');
+  add('prime', 'prime-video');
+  add('hbo max', 'max');
+  add('appletv+', 'apple-tv-plus');
+  add('apple tv plus', 'apple-tv-plus');
+  add('svt', 'svt-play');
+  add('tv4', 'tv4-play');
+  return base;
+})();
+
+function toProviderIdList(jsonish: unknown): ProviderId[] {
+  if (!Array.isArray(jsonish)) return [];
+  const out: ProviderId[] = [];
+  for (const raw of jsonish) {
+    const v = typeof raw === 'string' ? raw : typeof raw === 'number' ? String(raw) : null;
+    if (!v) continue;
+    const low = v.toLowerCase().trim();
+    // redan id?
+    if ((ID_TO_LABEL as Record<string, string>)[low]) {
+      out.push(low as ProviderId);
+      continue;
+    }
+    const mapped = LABEL_TO_ID[low];
+    if (mapped) out.push(mapped);
+  }
+  // unika och stabil ordning
+  return Array.from(new Set(out));
+}
+
+function providerIdsToLabels(ids: ProviderId[]): string[] {
+  return ids.map((id) => ID_TO_LABEL[id]).filter((s): s is string => typeof s === 'string' && s.length > 0);
+}
+
+// —————————————————————————————————————————————
+// Genrer: svensk lista + normalisering eng → sv
+// —————————————————————————————————————————————
+const ALL_GENRES_SV = [
+  'Action','Äventyr','Animerat','Komedi','Kriminal','Dokumentär',
+  'Drama','Fantasy','Skräck','Romantik','Sci-Fi','Thriller',
+  'Mysterium','Familj','Historia','Musik','Krig','Western',
+] as const;
+
+const ENG_TO_SV: Record<string, string> = {
+  'Action': 'Action',
+  'Adventure': 'Äventyr',
+  'Animation': 'Animerat',
+  'Comedy': 'Komedi',
+  'Crime': 'Kriminal',
+  'Documentary': 'Dokumentär',
+  'Drama': 'Drama',
+  'Fantasy': 'Fantasy',
+  'Horror': 'Skräck',
+  'Romance': 'Romantik',
+  'Science Fiction': 'Sci-Fi',
+  'Thriller': 'Thriller',
+  'Mystery': 'Mysterium',
+  'Family': 'Familj',
+  'History': 'Historia',
+  'Music': 'Musik',
+  'War': 'Krig',
+  'Western': 'Western',
+  // ibland i data:
+  'TV Movie': 'TV-film',
+  'Sci Fi': 'Sci-Fi',
+};
+
+function toSvGenres(arr: unknown): string[] {
+  if (!Array.isArray(arr)) return [];
+  const out: string[] = [];
+  for (const raw of arr) {
+    if (typeof raw !== 'string') continue;
+    const v = raw.trim();
+    const mapped = ENG_TO_SV[v] ?? v;
+    if (ALL_GENRES_SV.includes(mapped as typeof ALL_GENRES_SV[number])) out.push(mapped);
+  }
+  return Array.from(new Set(out));
+}
 
 function toInputDate(d: string | null): string {
   if (!d) return '';
@@ -175,15 +257,19 @@ export default function ProfileClient({ initial }: Props) {
   const [displayName, setDisplayName]   = useState<string>(initial?.displayName ?? '');
   const [dob, setDob]                   = useState<string>(toInputDate(initial?.dob ?? null));
   const [uiLanguage, setUiLanguage]     = useState<string>(initial?.uiLanguage ?? 'sv');
-  const [favoriteGenres, setFavoriteGenres] = useState<string[]>(initial?.favoriteGenres ?? []);
+
+  // Viktigt: klient-UI bygger på svenska genrer + provider-IDs
+  const [favoriteGenres, setFavoriteGenres] = useState<string[]>(
+    initial?.favoriteGenres ? toSvGenres(initial.favoriteGenres) : []
+  );
   const [dislikedGenres, setDislikedGenres] = useState<string[]>([]);
-  const [providers, setProviders]           = useState<string[]>([]);
+  const [providers, setProviders]           = useState<ProviderId[]>([]);
   const [favoriteMovie, setFavoriteMovie]   = useState<Fav>(initial?.favoriteMovie ?? null);
   const [favoriteShow, setFavoriteShow]     = useState<Fav>(initial?.favoriteShow ?? null);
   const [busy, setBusy] = useState<boolean>(false);
   const [msg, setMsg]   = useState<string | null>(null);
 
-  // Hydrate (om initial saknar vissa fält)
+  // Hydrera resterande fält (p.g.a. bakåtkomp. mm)
   useEffect(() => {
     let ignore = false;
     (async () => {
@@ -193,11 +279,21 @@ export default function ProfileClient({ initial }: Props) {
         const data = (await res.json()) as { ok: boolean; profile?: Record<string, unknown> };
         if (!data.ok || !data.profile || ignore) return;
         const p = data.profile as Record<string, unknown>;
-        setDislikedGenres((Array.isArray(p.dislikedGenres) ? p.dislikedGenres : []).filter((s): s is string => typeof s === 'string'));
-        setProviders((Array.isArray(p.providers) ? p.providers : []).filter((s): s is string => typeof s === 'string'));
+
+        // Genrer (eng → sv)
+        const fav = toSvGenres(p.favoriteGenres as unknown);
+        const dis = toSvGenres(p.dislikedGenres as unknown);
+        setFavoriteGenres(fav);
+        setDislikedGenres(dis);
+
+        // Providers (namn/ids/synonymer → ids)
+        const provIds = toProviderIdList(p.providers);
+        setProviders(provIds);
+
         if (typeof p.uiLanguage === 'string') setUiLanguage(p.uiLanguage);
         if (typeof p.displayName === 'string') setDisplayName(p.displayName);
         if (typeof p.dob === 'string') setDob(toInputDate(p.dob));
+
         if (p.favoriteMovie && typeof p.favoriteMovie === 'object') {
           const o = p.favoriteMovie as Record<string, unknown>;
           const id = typeof o.id === 'number' ? o.id : null;
@@ -216,9 +312,16 @@ export default function ProfileClient({ initial }: Props) {
   }, []);
 
   const toggle = (key: 'favoriteGenres' | 'dislikedGenres' | 'providers', value: string) => {
-    if (key === 'favoriteGenres') setFavoriteGenres((old) => (old.includes(value) ? old.filter((v) => v !== value) : [...old, value]));
-    else if (key === 'dislikedGenres') setDislikedGenres((old) => (old.includes(value) ? old.filter((v) => v !== value) : [...old, value]));
-    else setProviders((old) => (old.includes(value) ? old.filter((v) => v !== value) : [...old, value]));
+    if (key === 'favoriteGenres') {
+      setFavoriteGenres((old) => (old.includes(value) ? old.filter((v) => v !== value) : [...old, value]));
+      setDislikedGenres((old) => old.filter((v) => v !== value));
+    } else if (key === 'dislikedGenres') {
+      setDislikedGenres((old) => (old.includes(value) ? old.filter((v) => v !== value) : [...old, value]));
+      setFavoriteGenres((old) => old.filter((v) => v !== value));
+    } else {
+      const id = value as ProviderId;
+      setProviders((old) => (old.includes(id) ? old.filter((v) => v !== id) : [...old, id]));
+    }
   };
 
   const canSubmit = useMemo(() => !!displayName && !!dob, [displayName, dob]);
@@ -227,12 +330,25 @@ export default function ProfileClient({ initial }: Props) {
     if (!canSubmit) { setMsg('Fyll i namn och födelsedatum.'); return; }
     setBusy(true); setMsg(null);
     try {
+      // Skicka providers som NAMN (så vi matchar befintlig data)
+      const providersOut = providerIdsToLabels(providers);
+
       const res = await fetch('/api/profile/save-onboarding', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         cache: 'no-store',
-        body: JSON.stringify({ displayName, dob, uiLanguage, favoriteGenres, dislikedGenres, providers, favoriteMovie, favoriteShow }),
+        body: JSON.stringify({
+          displayName,
+          dob,
+          uiLanguage,
+          favoriteGenres,
+          dislikedGenres,
+          providers: providersOut,
+          favoriteMovie,
+          favoriteShow,
+        }),
       });
+
       let message = 'Sparat.';
       if (!res.ok) {
         try { const d = (await res.json()) as { message?: string }; if (d?.message) message = d.message; } catch {}
@@ -276,21 +392,21 @@ export default function ProfileClient({ initial }: Props) {
           <div>
             <label className="mb-1 block text-sm text-white/70">UI-språk</label>
             <div className="flex flex-wrap gap-2">
-              {ALL_LANGS.map((l) => (
-                <button key={l.code} type="button" onClick={() => setUiLanguage(l.code)}
-                  className={classNames('rounded-xl border px-3 py-2 text-sm', uiLanguage === l.code ? 'border-violet-500 bg-violet-600/20' : 'border-white/10 bg-black/30 hover:bg-white/5')}>
-                  {l.label}
+              {['sv','en'].map((code) => (
+                <button key={code} type="button" onClick={() => setUiLanguage(code)}
+                  className={classNames('rounded-xl border px-3 py-2 text-sm', uiLanguage === code ? 'border-violet-500 bg-violet-600/20' : 'border-white/10 bg-black/30 hover:bg-white/5')}>
+                  {code === 'sv' ? 'Svenska' : 'English'}
                 </button>
               ))}
             </div>
           </div>
         </div>
 
-        {/* Genrer */}
+        {/* Genrer (svenska) */}
         <div>
           <label className="mb-2 block text-sm text-white/70">Gillar genrer</label>
           <div className="flex flex-wrap gap-2">
-            {ALL_GENRES.map((g) => (
+            {ALL_GENRES_SV.map((g) => (
               <button type="button" key={`like-${g}`} onClick={() => toggle('favoriteGenres', g)}
                 className={classNames('rounded-xl border px-3 py-2 text-sm', favoriteGenres.includes(g) ? 'border-emerald-500 bg-emerald-600/20' : 'border-white/10 bg-black/30 hover:bg-white/5')}>
                 {g}
@@ -302,7 +418,7 @@ export default function ProfileClient({ initial }: Props) {
         <div>
           <label className="mb-2 block text-sm text-white/70">Undvik genrer</label>
           <div className="flex flex-wrap gap-2">
-            {ALL_GENRES.map((g) => (
+            {ALL_GENRES_SV.map((g) => (
               <button type="button" key={`dislike-${g}`} onClick={() => toggle('dislikedGenres', g)}
                 className={classNames('rounded-xl border px-3 py-2 text-sm', dislikedGenres.includes(g) ? 'border-rose-500 bg-rose-600/20' : 'border-white/10 bg-black/30 hover:bg-white/5')}>
                 {g}
@@ -311,14 +427,19 @@ export default function ProfileClient({ initial }: Props) {
           </div>
         </div>
 
-        {/* Providers */}
+        {/* Providers (IDs i state, men visas med label) */}
         <div>
           <label className="mb-2 block text-sm text-white/70">Tjänster du har</label>
           <div className="flex flex-wrap gap-2">
             {PROVIDERS.map((p) => (
-              <button type="button" key={p.id} onClick={() => toggle('providers', p.id)}
+              <button
+                type="button"
+                key={p.id}
+                onClick={() => toggle('providers', p.id)}
                 className={classNames('rounded-xl border px-3 py-2 text-sm', providers.includes(p.id) ? 'border-sky-500 bg-sky-600/20' : 'border-white/10 bg-black/30 hover:bg-white/5')}
-                title={p.label} aria-label={p.label}>
+                title={p.label}
+                aria-label={p.label}
+              >
                 {p.label}
               </button>
             ))}
