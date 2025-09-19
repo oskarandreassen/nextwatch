@@ -6,13 +6,20 @@ import Image from "next/image";
 type Poster = { id: number; title: string; year: string; src: string };
 
 type Props = {
-  /** Högre värde = långsammare. Default 24000ms (halverad hastighet mot tidigare). */
+  /** Längre duration = långsammare. Default 24000ms (halverad hastighet mot tidigare). */
   durationMs?: number;
+  /** Extra klasser för placering. */
   className?: string;
+  /** Överskriv höjdklasser vid behov. */
+  heightClass?: string;
 };
 
-/** Sömlös poster-reel med “starta-först-när-laddad”-logik. */
-export default function HeroReel({ durationMs = 24000, className }: Props) {
+/** Sömlös poster-reel med “starta först när laddad”-logik. */
+export default function HeroReel({
+  durationMs = 24000,
+  className,
+  heightClass,
+}: Props) {
   const [items, setItems] = useState<Poster[]>([]);
   const [loadedCount, setLoadedCount] = useState(0);
   const marked = useRef<Set<string>>(new Set());
@@ -34,9 +41,9 @@ export default function HeroReel({ durationMs = 24000, className }: Props) {
     };
   }, []);
 
-  // Duplicera listan för ändlös loop
+  // duplicera för ändlös loop
   const loop = items.length > 0 ? [...items, ...items] : [];
-  const ready = loadedCount >= Math.min(6, items.length); // börja animera när minst 6 är klara
+  const ready = loadedCount >= Math.min(6, items.length); // börja animera när minst sex är klara
 
   const fallback =
     "data:image/svg+xml;utf8," +
@@ -45,7 +52,15 @@ export default function HeroReel({ durationMs = 24000, className }: Props) {
     );
 
   return (
-    <div className={["relative h-[280px] sm:h-[340px] md:h-[420px] w-full overflow-hidden", className].filter(Boolean).join(" ")}>
+    <div
+      className={[
+        "relative w-full overflow-hidden",
+        heightClass ?? "h-[200px] sm:h-[240px] md:h-[280px]",
+        className,
+      ]
+        .filter(Boolean)
+        .join(" ")}
+    >
       <div
         className="absolute left-0 top-0 flex h-full w-max items-center gap-4 will-change-transform"
         style={{
@@ -57,7 +72,7 @@ export default function HeroReel({ durationMs = 24000, className }: Props) {
         {loop.map((p, i) => (
           <div
             key={`${p.id}-${i}`}
-            className="relative h-[85%] w-[150px] sm:w-[180px] md:w-[210px] shrink-0 overflow-hidden rounded-2xl border border-white/10 bg-white/5 shadow-lg"
+            className="relative h-[88%] w-[136px] sm:w-[160px] md:w-[180px] shrink-0 overflow-hidden rounded-2xl border border-white/10 bg-white/5 shadow-lg"
             title={p.title}
             draggable={false}
           >
@@ -65,9 +80,9 @@ export default function HeroReel({ durationMs = 24000, className }: Props) {
               src={p.src}
               alt={p.title}
               fill
-              sizes="(max-width: 640px) 150px, (max-width: 768px) 180px, 210px"
+              sizes="(max-width: 640px) 136px, (max-width: 768px) 160px, 180px"
               className="object-cover"
-              priority={i < 2}                 // prioritera bara de första
+              priority={i < 2}
               fetchPriority={i < 2 ? "high" : "low"}
               onError={(e) => {
                 const el = e.currentTarget as HTMLImageElement & { src: string };
@@ -86,6 +101,7 @@ export default function HeroReel({ durationMs = 24000, className }: Props) {
         ))}
       </div>
 
+      {/* mjuk överton för läsbarhet */}
       <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/40 via-black/20 to-black/60" />
       <style jsx>{`
         @keyframes nw-reel {
