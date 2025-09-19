@@ -20,6 +20,8 @@ export type ProfileDTO = {
   locale: string | null;
   uiLanguage: string | null;
   favoriteGenres: string[];
+  dislikedGenres?: string[]; // valfri – klient hydr. ändå
+  providers?: string[];      // valfri – klient hydr. ändå
   favoriteMovie?: FavoriteItem | null;
   favoriteShow?: FavoriteItem | null;
 };
@@ -45,10 +47,13 @@ function asFavoriteItem(x: unknown): FavoriteItem | null {
   const poster =
     typeof obj.poster === "string" ? obj.poster : obj.poster === null ? null : undefined;
 
-  return { id: obj.id, title: obj.title, year, poster };
+  const out: Record<string, unknown> = { id: obj.id, title: obj.title };
+  if (typeof year !== "undefined") out.year = year;
+  if (typeof poster !== "undefined") out.poster = poster;
+  return out as FavoriteItem;
 }
 
-export default async function ProfilePage() {
+export default async function Page() {
   const jar = await cookies();
   const uid = jar.get("nw_uid")?.value ?? null;
 
@@ -59,19 +64,31 @@ export default async function ProfilePage() {
       where: { userId: uid },
       select: {
         displayName: true,
-        dob: true, // Date | null
+        dob: true,
         region: true,
         locale: true,
         uiLanguage: true,
-        favoriteGenres: true, // Json
-        favoriteMovie: true,  // Json
-        favoriteShow: true,   // Json
+        favoriteGenres: true,
+        dislikedGenres: true,
+        providers: true,
+        favoriteMovie: true,
+        favoriteShow: true,
       },
     });
 
     if (prof) {
       const favoriteGenres = Array.isArray(prof.favoriteGenres)
         ? (prof.favoriteGenres as unknown[]).filter(
+            (g): g is string => typeof g === "string"
+          )
+        : [];
+      const dislikedGenres = Array.isArray(prof.dislikedGenres)
+        ? (prof.dislikedGenres as unknown[]).filter(
+            (g): g is string => typeof g === "string"
+          )
+        : [];
+      const providers = Array.isArray(prof.providers)
+        ? (prof.providers as unknown[]).filter(
             (g): g is string => typeof g === "string"
           )
         : [];
@@ -83,12 +100,13 @@ export default async function ProfilePage() {
         locale: prof.locale ?? null,
         uiLanguage: prof.uiLanguage ?? null,
         favoriteGenres,
+        dislikedGenres,
+        providers,
         favoriteMovie: asFavoriteItem(prof.favoriteMovie as unknown),
         favoriteShow: asFavoriteItem(prof.favoriteShow as unknown),
       };
     }
   }
 
-  // Låt ProfileClient visa rubriken för att undvika dubblering
   return <ProfileClient initial={initial} />;
 }

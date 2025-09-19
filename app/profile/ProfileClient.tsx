@@ -11,21 +11,21 @@ export type FavoriteItem = {
   poster?: string | null;
 };
 
+// Tillåt undefined för favoriteMovie/favoriteShow så typningen matchar serverns DTO exakt.
 export type ProfileDTO = {
   displayName: string | null;
-  dob: string | null;            // ISO yyyy-mm-dd
+  dob: string | null;
   region: string | null;
   locale: string | null;
-  uiLanguage: string | null;     // 'sv' | 'en' | ...
+  uiLanguage: string | null;
   favoriteGenres: string[];
+  dislikedGenres?: string[];
+  providers?: string[];
   favoriteMovie?: FavoriteItem | null;
   favoriteShow?: FavoriteItem | null;
 };
 
-type Props = {
-  initial: ProfileDTO | null;
-};
-
+type Props = { initial: ProfileDTO | null };
 type Fav = FavoriteItem | null;
 
 // —————————————————————————————————————————————
@@ -73,15 +73,13 @@ function toProviderIdList(jsonish: unknown): ProviderId[] {
     const v = typeof raw === 'string' ? raw : typeof raw === 'number' ? String(raw) : null;
     if (!v) continue;
     const low = v.toLowerCase().trim();
-    // redan id?
     if ((ID_TO_LABEL as Record<string, string>)[low]) {
-      out.push(low as ProviderId);
+      out.push(low as ProviderId); // redan id
       continue;
     }
     const mapped = LABEL_TO_ID[low];
     if (mapped) out.push(mapped);
   }
-  // unika och stabil ordning
   return Array.from(new Set(out));
 }
 
@@ -117,7 +115,6 @@ const ENG_TO_SV: Record<string, string> = {
   'Music': 'Musik',
   'War': 'Krig',
   'Western': 'Western',
-  // ibland i data:
   'TV Movie': 'TV-film',
   'Sci Fi': 'Sci-Fi',
 };
@@ -262,38 +259,33 @@ export default function ProfileClient({ initial }: Props) {
   const [favoriteGenres, setFavoriteGenres] = useState<string[]>(
     initial?.favoriteGenres ? toSvGenres(initial.favoriteGenres) : []
   );
-  const [dislikedGenres, setDislikedGenres] = useState<string[]>([]);
-  const [providers, setProviders]           = useState<ProviderId[]>([]);
+  const [dislikedGenres, setDislikedGenres] = useState<string[]>(
+    initial?.dislikedGenres ? toSvGenres(initial.dislikedGenres) : []
+  );
+  const [providers, setProviders]           = useState<ProviderId[]>(
+    initial?.providers ? toProviderIdList(initial.providers) : []
+  );
   const [favoriteMovie, setFavoriteMovie]   = useState<Fav>(initial?.favoriteMovie ?? null);
   const [favoriteShow, setFavoriteShow]     = useState<Fav>(initial?.favoriteShow ?? null);
   const [busy, setBusy] = useState<boolean>(false);
   const [msg, setMsg]   = useState<string | null>(null);
 
-  // Hydrera resterande fält (p.g.a. bakåtkomp. mm)
+  // Hydrera från API – bakåtkompatibelt om initial saknar något
   useEffect(() => {
     let ignore = false;
     (async () => {
       try {
         const res = await fetch('/api/profile', { cache: 'no-store' });
         if (!res.ok) return;
-        const data = (await res.json()) as { ok: boolean; profile?: Record<string, unknown> };
+        const data = (await res.json()) as { ok: boolean; profile?: Record<string, unknown> | null };
         if (!data.ok || !data.profile || ignore) return;
         const p = data.profile as Record<string, unknown>;
-
-        // Genrer (eng → sv)
-        const fav = toSvGenres(p.favoriteGenres as unknown);
-        const dis = toSvGenres(p.dislikedGenres as unknown);
-        setFavoriteGenres(fav);
-        setDislikedGenres(dis);
-
-        // Providers (namn/ids/synonymer → ids)
-        const provIds = toProviderIdList(p.providers);
-        setProviders(provIds);
-
+        if (Array.isArray(p.favoriteGenres)) setFavoriteGenres(toSvGenres(p.favoriteGenres));
+        if (Array.isArray(p.dislikedGenres)) setDislikedGenres(toSvGenres(p.dislikedGenres));
+        if (Array.isArray(p.providers)) setProviders(toProviderIdList(p.providers));
         if (typeof p.uiLanguage === 'string') setUiLanguage(p.uiLanguage);
         if (typeof p.displayName === 'string') setDisplayName(p.displayName);
         if (typeof p.dob === 'string') setDob(toInputDate(p.dob));
-
         if (p.favoriteMovie && typeof p.favoriteMovie === 'object') {
           const o = p.favoriteMovie as Record<string, unknown>;
           const id = typeof o.id === 'number' ? o.id : null;

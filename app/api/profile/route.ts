@@ -2,6 +2,7 @@
 import { NextResponse } from "next/server";
 import { cookies, headers } from "next/headers";
 import prisma from "../../../lib/prisma";
+import { Prisma } from "@prisma/client";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -32,76 +33,107 @@ async function inferRegionAndLocale(): Promise<{ region: string; locale: string 
 }
 
 export async function GET() {
-  const cookieStore = await cookies();
-  const uid = cookieStore.get("nw_uid")?.value || null;
+  const jar = await cookies();
+  const uid = jar.get("nw_uid")?.value || null;
   if (!uid) return NextResponse.json({ ok: false, error: "No session" }, { status: 401 });
 
-  const profile = await prisma.profile.findUnique({ where: { userId: uid } });
-  return NextResponse.json({ ok: true, profile });
+  const prof = await prisma.profile.findUnique({
+    where: { userId: uid },
+    select: {
+      userId: true,
+      displayName: true,
+      dob: true,
+      region: true,
+      locale: true,
+      uiLanguage: true,
+      favoriteGenres: true,
+      dislikedGenres: true,
+      providers: true,
+      favoriteMovie: true,
+      favoriteShow: true,
+      updatedAt: true,
+    },
+  });
+
+  if (!prof) return NextResponse.json({ ok: true, profile: null });
+
+  const dob = prof.dob ? new Date(prof.dob).toISOString() : null;
+
+  return NextResponse.json({
+    ok: true,
+    profile: { ...prof, dob },
+  });
 }
 
 export async function PUT(req: Request) {
-  const cookieStore = await cookies();
-  const uid = cookieStore.get("nw_uid")?.value || null;
+  const jar = await cookies();
+  const uid = jar.get("nw_uid")?.value || null;
   if (!uid) return NextResponse.json({ ok: false, error: "No session" }, { status: 401 });
 
   const body = (await req.json()) as Record<string, unknown>;
 
-  const asStringArray = (x: unknown): string[] => (Array.isArray(x) ? x.filter((v): v is string => typeof v === "string") : []);
-  const asString = (x: unknown): string | null => (typeof x === "string" && x.trim() !== "" ? x.trim() : null);
+  const s = (x: unknown): string | null => (typeof x === "string" && x.trim() !== "" ? x.trim() : null);
+  const arr = (x: unknown): string[] => (Array.isArray(x) ? x.filter((v): v is string => typeof v === "string") : []);
 
-  const displayName = asString(body.displayName);
-  const dobStr = asString(body.dob); // kan vara null -> vi sätter bara om det finns
-  const favoriteGenres = asStringArray(body.favoriteGenres);
-  const dislikedGenres = asStringArray(body.dislikedGenres);
-  const providers = asStringArray(body.providers);
+  const displayName = s(body.displayName);
+  const dobStr = s(body.dob);
+  const favoriteGenres = arr(body.favoriteGenres);
+  const dislikedGenres = arr(body.dislikedGenres);
+  const providers = arr(body.providers);
+  const favMovie = (body.favoriteMovie ?? null) as Prisma.InputJsonValue | null;
+  const favShow = (body.favoriteShow ?? null) as Prisma.InputJsonValue | null;
 
   const { region, locale } = await inferRegionAndLocale();
-  const uiLanguageRaw = asString(body.uiLanguage);
-  const uiLanguage = uiLanguageRaw ? uiLanguageRaw : (locale.split("-")[0] || "sv");
+  const uiLanguage = s(body.uiLanguage) ?? (locale.split("-")[0] || "sv");
 
-  // Finns profil → UPDATE; annars CREATE (kräver dob & displayName)
   const existing = await prisma.profile.findUnique({ where: { userId: uid } });
 
   if (existing) {
     const updated = await prisma.profile.update({
       where: { userId: uid },
       data: {
-        displayName: typeof displayName === "string" ? displayName : undefined,
-        dob: dobStr ? new Date(dobStr) : undefined, // ❗️bara sätta om given
+        displayName: displayName ?? undefined,
+        dob: dobStr ? new Date(dobStr) : undefined,
+        uiLanguage,
         region,
         locale,
-        uiLanguage,
         favoriteGenres,
         dislikedGenres,
         providers,
+        favoriteMovie: (favMovie ?? undefined) as Prisma.InputJsonValue | undefined,
+        favoriteShow: (favShow ?? undefined) as Prisma.InputJsonValue | undefined,
         updatedAt: new Date(),
       },
     });
-    return NextResponse.json({ ok: true, profile: updated });
+    return NextResponse.json({
+      ok: true,
+      profile: { ...updated, dob: updated.dob ? updated.dob.toISOString() : null },
+    });
   }
 
   if (!displayName || !dobStr) {
-    return NextResponse.json(
-      { ok: false, error: "displayName och dob krävs för att skapa profilen." },
-      { status: 400 }
-    );
+    return NextResponse.json({ ok: false, error: "displayName and dob required" }, { status: 400 });
   }
 
   const created = await prisma.profile.create({
     data: {
       userId: uid,
       displayName,
-      dob: new Date(dobStr), // ✅ obligatoriskt i create om din schema kräver det
+      dob: new Date(dobStr),
+      uiLanguage,
       region,
       locale,
-      uiLanguage,
       favoriteGenres,
       dislikedGenres,
       providers,
+      favoriteMovie: favMovie as Prisma.InputJsonValue,
+      favoriteShow: favShow as Prisma.InputJsonValue,
       updatedAt: new Date(),
     },
   });
 
-  return NextResponse.json({ ok: true, profile: created });
+  return NextResponse.json({
+    ok: true,
+    profile: { ...created, dob: created.dob ? created.dob.toISOString() : null },
+  });
 }
