@@ -15,10 +15,12 @@ model User {
   planSince DateTime? @map("plan_since")
   createdAt DateTime  @default(now()) @map("created_at")
 
+  // Verifiering & login
   emailVerified DateTime? @map("email_verified")
   passwordHash  String?   @map("password_hash")
   lastLoginAt   DateTime? @map("last_login_at")
 
+  // Username för kompis-sök
   username String? @unique
 
   profile   Profile?
@@ -37,25 +39,30 @@ model User {
   friendshipsAsUser      Friendship[]    @relation("FriendshipUser")
   friendshipsAsFriend    Friendship[]    @relation("FriendshipFriend")
 
+  verifications Verification[]
+
   @@map("users")
 }
 
 model Profile {
   userId           String   @id @map("user_id")
-  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  displayName      String?  @map("display_name")
-  dob              DateTime? @db.Date
-  uiLanguage       String    @default("sv")    @map("ui_language")
-  yearPreference   String    @default("all")   @map("year_preference")
-  recycleAfterDays Int       @default(14)      @map("recycle_after_days")
-  region           String    @default("SE")
-  locale           String    @default("sv-SE")
-  providers        Json
-  favoriteMovie    Json?     @map("favorite_movie")
-  favoriteShow     Json?     @map("favorite_show")
-  favoriteGenres   String[]  @default([])
-  dislikedGenres   String[]  @default([])
-  updatedAt        DateTime  @default(now())   @map("updated_at")
+  dob              DateTime @db.Date
+  uiLanguage       String   @default("sv")   @map("ui_language")
+  yearPreference   String   @default("all")  @map("year_preference")
+  recycleAfterDays Int      @default(14)     @map("recycle_after_days")
+  region           String   @default("SE")
+  locale           String   @default("sv-SE")
+  providers        Json     @default("[]") // Om Prisma klagar på default → ta bort @default här (DB har default).
+  updatedAt        DateTime @default(now()) @map("updated_at")
+
+  // Smakprofil
+  displayName    String? @map("display_name")
+  favoriteMovie  Json?   @map("favorite_movie") // JSONB
+  favoriteShow   Json?   @map("favorite_show")  // JSONB
+  favoriteGenres String[] @default([]) @map("favorite_genres")   // text[]
+  dislikedGenres String[] @default([]) @map("disliked_genres")   // text[]
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("profiles")
 }
@@ -63,37 +70,69 @@ model Profile {
 model Verification {
   token      String   @id
   userId     String   @map("user_id")
-  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   email      String
   name       String?
   createdAt  DateTime @default(now()) @map("created_at")
   expiresAt  DateTime @map("expires_at")
 
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([email], map: "idx_verifications_email")
+  @@index([userId], map: "idx_verifications_user_id")
   @@map("verifications")
+}
+
+model Rating {
+  id        String   @id
+  userId    String   @map("user_id")
+  tmdbId    Int      @map("tmdb_id")
+  mediaType String   @map("media_type")
+  decision  String
+  decidedAt DateTime @default(now()) @map("decided_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, tmdbId, mediaType], map: "idx_ratings_user_tmdb")
+  @@map("ratings")
+}
+
+model watchlist {
+  id        String  @id
+  userId    String  @map("user_id")
+  tmdbId    Int     @map("tmdb_id")
+  mediaType String  @map("media_type")
+  addedAt   DateTime @default(now()) @map("added_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, tmdbId, mediaType])
+  @@map("watchlist")
 }
 
 model Purchase {
   id                    String   @id
   userId                String   @map("user_id")
-  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   stripePaymentIntentId String?  @map("stripe_payment_intent_id")
   amountTotal           Int      @default(0)     @map("amount_total")
   currency              String   @default("SEK")
   product               String   @default("lifetime")
   createdAt             DateTime @default(now()) @map("created_at")
 
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
   @@index([userId, createdAt], map: "idx_purchases_user")
   @@map("purchases")
 }
 
 model Group {
-  code       String   @id
-  createdBy  String   @map("created_by")
-  creator    User     @relation("UserGroupsCreated", fields: [createdBy], references: [id], onDelete: Cascade)
-  createdAt  DateTime @default(now()) @map("created_at")
+  code      String   @id
+  createdBy String   @map("created_by")
+  createdAt DateTime @default(now()) @map("created_at")
 
   members GroupMember[]
-  votes   GroupVote[]
+  votes   GroupVote[] @relation("GroupVotes")
+
+  creator User @relation("UserGroupsCreated", fields: [createdBy], references: [id], onDelete: Cascade)
 
   @@map("groups")
 }
@@ -110,69 +149,27 @@ model GroupMember {
   @@map("group_members")
 }
 
-enum TmdbType {
-  movie
-  tv
-}
-
-enum Vote {
-  LIKE
-  DISLIKE
-  SKIP
-}
-
 model GroupVote {
-  groupCode String   @map("group_code")
-  userId    String   @map("user_id")
-  tmdbId    Int      @map("tmdb_id")
-  tmdbType  TmdbType @map("tmdb_type")
-  vote      Vote
+  groupCode String  @map("group_code")
+  userId    String  @map("user_id")
+  tmdbId    Int     @map("tmdb_id")
+  tmdbType  String  @map("tmdb_type") // 'movie' | 'tv' (DB: CHECK)
+  vote      String  // 'LIKE' | 'DISLIKE' | 'SKIP' (DB: CHECK)
   decidedAt DateTime @default(now()) @map("decided_at")
 
-  group Group @relation(fields: [groupCode], references: [code], onDelete: Cascade)
+  group Group @relation("GroupVotes", fields: [groupCode], references: [code], onDelete: Cascade)
   user  User  @relation("UserGroupVotes", fields: [userId], references: [id], onDelete: Cascade)
 
   @@id([groupCode, userId, tmdbId, tmdbType])
-  @@index([groupCode, tmdbId, tmdbType], map: "idx_group_votes_group_tmdb")
   @@map("group_votes")
 }
 
-model watchlist {
-  id        String  @id @default(cuid())
-  userId    String  @map("user_id")
-  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  tmdbId    Int     @map("tmdb_id")
-  mediaType String  @map("media_type")
-
-  @@unique([userId, tmdbId, mediaType], name: "watchlist_user_tmdb_media_unique")
-  @@map("watchlist")
-}
-
-model Rating {
-  id        String   @id @default(cuid())
-  userId    String   @map("user_id")
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  tmdbId    Int      @map("tmdb_id")
-  mediaType String   @map("media_type")
-  value     Int
-
-  @@index([userId, tmdbId, mediaType], map: "idx_ratings_user_tmdb")
-  @@map("ratings")
-}
-
-enum FriendRequestStatus {
-  pending
-  accepted
-  declined
-  cancelled
-}
-
 model FriendRequest {
-  id         String  @id @db.Uuid @default(dbgenerated("gen_random_uuid()"))
+  id         String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   fromUserId String  @map("from_user_id")
   toUserId   String  @map("to_user_id")
-  status     String  @default("pending")
-  createdAt  DateTime  @default(now()) @map("created_at")
+  status     String  @default("pending") // pending | accepted | declined | cancelled
+  createdAt  DateTime @default(now()) @map("created_at")
   decidedAt  DateTime? @map("decided_at")
 
   fromUser User @relation("FriendRequestsSent", fields: [fromUserId], references: [id], onDelete: Cascade)
