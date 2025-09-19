@@ -1,17 +1,13 @@
 // app/onboarding/page.tsx
+import { cookies } from "next/headers";
+import Client from "./page_client";
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-import { Suspense } from "react";
-import OnboardingClient from "./page_client";
-
-export default function OnboardingPage() {
-  return (
-    <main className="max-w-3xl mx-auto p-6">
-      <h1 className="text-2xl font-semibold mb-4">Onboarding</h1>
-      <Suspense fallback={<div className="text-neutral-400">Laddar…</div>}>
-        <OnboardingClient />
-      </Suspense>
-    </main>
-  );
+export default async function OnboardingPage() {
+  // Regler: alltid await cookies() i App Router (server)
+  await cookies();
+  // Ingen extra rubrik här – klienten står för UI:t.
+  return <Client />;
 }

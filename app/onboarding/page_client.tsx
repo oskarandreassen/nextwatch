@@ -78,6 +78,13 @@ function ProviderChip({
 // ---------- typer ----------
 type Fav = { id: number; title: string; year?: string; poster?: string | null };
 
+// Liten hjälpare för att läsa cookie-värden client-side
+function getCookie(name: string): string | null {
+  if (typeof document === "undefined") return null;
+  const m = document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`));
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
 function SearchBox({
   label,
   placeholder,
@@ -178,7 +185,6 @@ function SearchBox({
               className="flex w-full items-center gap-3 p-2 text-left hover:bg-white/10"
             >
               <div className="relative h-10 w-7 shrink-0 overflow-hidden rounded">
-                {/* Next Image används för att undvika eslint-varning; unoptimized = ingen extra konfiguration */}
                 <Image
                   src={
                     it.poster ??
@@ -206,8 +212,6 @@ function SearchBox({
 
 // ---------- constants ----------
 const LANGS = ["sv", "en"] as const;
-const LOCALES = ["sv-SE", "en-US"] as const;
-const REGIONS = ["SE", "NO", "DK", "FI"] as const;
 
 const PROVIDERS = [
   "Netflix",
@@ -236,15 +240,13 @@ const GENRES = [
   "Dokumentär",
 ] as const;
 
-export default function OnboardingPage() {
+export default function Client() {
   const router = useRouter();
 
   // state
   const [displayName, setDisplayName] = useState("");
   const [dob, setDob] = useState("");
   const [language, setLanguage] = useState<(typeof LANGS)[number]>("sv");
-  const [region, setRegion] = useState<(typeof REGIONS)[number]>("SE");
-  const [locale, setLocale] = useState<(typeof LOCALES)[number]>("sv-SE");
   const [providers, setProviders] = useState<string[]>([]);
   const [favoriteMovie, setFavoriteMovie] = useState<Fav | null>(null);
   const [favoriteShow, setFavoriteShow] = useState<Fav | null>(null);
@@ -252,6 +254,13 @@ export default function OnboardingPage() {
   const [dislikeGenres, setDislikeGenres] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [searchLocale, setSearchLocale] = useState<string>("sv-SE");
+
+  // Läs nw_locale från cookie (sätts av middleware) så TMDB-sök använder samma locale.
+  useEffect(() => {
+    const l = getCookie("nw_locale");
+    if (l && /^[a-z]{2}(-[A-Z]{2})?$/.test(l)) setSearchLocale(l);
+  }, []);
 
   function toggleProvider(p: string) {
     setProviders((prev) =>
@@ -276,7 +285,7 @@ export default function OnboardingPage() {
     setErr(null);
     setLoading(true);
 
-    // Viktigt: region/locale skickas inte längre (servern härleder själv)
+    // Region/Locale skickas inte – servern härleder från cookies/IP.
     const payload = {
       displayName,
       dob,
@@ -348,7 +357,7 @@ export default function OnboardingPage() {
             </div>
           </div>
 
-          {/* Rad 2 */}
+          {/* Rad 2 – ENDAST Språk kvar */}
           <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
             <div>
               <label className="mb-1 block text-sm text-white/70">Språk</label>
@@ -366,43 +375,6 @@ export default function OnboardingPage() {
                 ))}
               </select>
             </div>
-
-            {/* Region/Locale lämnas visuellt kvar enligt din nuvarande UI,
-                men påverkar inte längre payload till servern */}
-            <div>
-              <label className="mb-1 block text-sm text-white/70">Region</label>
-              <select
-                className="w-full rounded-xl border border-white/10 bg-black/40 p-3 outline-none focus:ring-2 focus:ring-white/20"
-                value={region}
-                onChange={(e) =>
-                  setRegion(e.target.value as (typeof REGIONS)[number])
-                }
-                required
-              >
-                {REGIONS.map((r) => (
-                  <option key={r} value={r}>
-                    {r}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label className="mb-1 block text-sm text-white/70">Locale</label>
-              <select
-                className="w-full rounded-xl border border-white/10 bg-black/40 p-3 outline-none focus:ring-2 focus:ring-white/20"
-                value={locale}
-                onChange={(e) =>
-                  setLocale(e.target.value as (typeof LOCALES)[number])
-                }
-                required
-              >
-                {LOCALES.map((l) => (
-                  <option key={l} value={l}>
-                    {l}
-                  </option>
-                ))}
-              </select>
-            </div>
           </div>
 
           {/* Rad 3: favoritfilm/serie */}
@@ -413,7 +385,7 @@ export default function OnboardingPage() {
               type="movie"
               value={favoriteMovie}
               onSelect={setFavoriteMovie}
-              locale={locale}
+              locale={searchLocale}
             />
             <SearchBox
               label="Favoritserie"
@@ -421,7 +393,7 @@ export default function OnboardingPage() {
               type="tv"
               value={favoriteShow}
               onSelect={setFavoriteShow}
-              locale={locale}
+              locale={searchLocale}
             />
           </div>
 
