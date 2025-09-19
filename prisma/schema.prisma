@@ -1,3 +1,16 @@
+// prisma/schema.prisma
+
+// ========== GENERATOR & DATASOURCE ==========
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL") // Neon: måste vara satt i Vercel env
+}
+
+// ========== ENUMS ==========
 enum Vote {
   LIKE
   DISLIKE
@@ -16,6 +29,7 @@ enum FriendRequestStatus {
   cancelled
 }
 
+// ========== MODELS ==========
 model User {
   id            String   @id
   email         String?
@@ -23,13 +37,14 @@ model User {
   emailVerified DateTime? @map("email_verified")
   passwordHash  String?   @map("password_hash")
   lastLoginAt   DateTime? @map("last_login_at")
-  plan          String     @default("free")
-  planSince     DateTime?  @map("plan_since")
-  createdAt     DateTime   @default(now()) @map("created_at")
+  plan          String    @default("free")
+  planSince     DateTime? @map("plan_since")
+  createdAt     DateTime  @default(now()) @map("created_at")
 
+  // Relations
   profile       Profile?
   purchases     Purchase[]
-  groups        Group[]    @relation("GroupsCreated")
+  groups        Group[]       @relation("GroupsCreated")
   groupMembers  GroupMember[]
   groupVotes    GroupVote[]
   ratings       Rating[]
@@ -37,32 +52,35 @@ model User {
   sentRequests  FriendRequest[] @relation("FromUser")
   recvRequests  FriendRequest[] @relation("ToUser")
   friendships   Friendship[]    @relation("UserFriendships")
+
+  @@map("users")
 }
 
 model Profile {
   userId            String  @id @map("user_id")
   user              User    @relation(fields: [userId], references: [id])
-  displayName       String? @map("display_name")
+
+  displayName       String?  @map("display_name")
   dob               DateTime? @db.Date
-  uiLanguage        String   @default("sv") @map("ui_language")
-  yearPreference    String   @default("all") @map("year_preference")
-  recycleAfterDays  Int      @default(14) @map("recycle_after_days")
-  region            String   @default("SE")
-  locale            String   @default("sv-SE")
-  providers         Json     @default("[]")
-  favoriteMovie     Json?
-  favoriteShow      Json?
-  favoriteGenres    String[] @default([])
-  dislikedGenres    String[] @default([])
-  updatedAt         DateTime @default(now()) @map("updated_at")
+  uiLanguage        String    @default("sv")    @map("ui_language")
+  yearPreference    String    @default("all")   @map("year_preference")
+  recycleAfterDays  Int       @default(14)      @map("recycle_after_days")
+  region            String    @default("SE")
+  locale            String    @default("sv-SE")
+  providers         Json      @default("[]")
+  favoriteMovie     Json?     @map("favorite_movie")
+  favoriteShow      Json?     @map("favorite_show")
+  favoriteGenres    String[]  @default([])
+  dislikedGenres    String[]  @default([])
+  updatedAt         DateTime  @default(now())   @map("updated_at")
 
   @@map("profiles")
 }
 
 model Verification {
-  token      String  @id
-  userId     String  @map("user_id")
-  user       User    @relation(fields: [userId], references: [id])
+  token      String   @id
+  userId     String   @map("user_id")
+  user       User     @relation(fields: [userId], references: [id])
   email      String
   name       String?
   createdAt  DateTime @default(now()) @map("created_at")
@@ -72,13 +90,13 @@ model Verification {
 }
 
 model Purchase {
-  id                    String  @id
-  userId                String  @map("user_id")
-  user                  User    @relation(fields: [userId], references: [id])
-  stripePaymentIntentId String? @map("stripe_payment_intent_id")
-  amountTotal           Int     @default(0) @map("amount_total")
-  currency              String  @default("SEK")
-  product               String  @default("lifetime")
+  id                    String   @id
+  userId                String   @map("user_id")
+  user                  User     @relation(fields: [userId], references: [id])
+  stripePaymentIntentId String?  @map("stripe_payment_intent_id")
+  amountTotal           Int      @default(0)     @map("amount_total") // minor units
+  currency              String   @default("SEK")
+  product               String   @default("lifetime")
   createdAt             DateTime @default(now()) @map("created_at")
 
   @@index([userId, createdAt], map: "idx_purchases_user")
@@ -97,9 +115,10 @@ model Group {
 }
 
 model GroupMember {
-  groupCode String @map("group_code")
-  userId    String @map("user_id")
+  groupCode String   @map("group_code")
+  userId    String   @map("user_id")
   joinedAt  DateTime @default(now()) @map("joined_at")
+
   group     Group @relation(fields: [groupCode], references: [code])
   user      User  @relation(fields: [userId], references: [id])
 
@@ -124,7 +143,7 @@ model GroupVote {
 }
 
 model FriendRequest {
-  id         String  @id @default(uuid()) @db.Uuid
+  id         String  @id @db.Uuid @default(dbgenerated("gen_random_uuid()"))
   fromUserId String  @map("from_user_id")
   toUserId   String  @map("to_user_id")
   fromUser   User    @relation("FromUser", fields: [fromUserId], references: [id])
@@ -133,21 +152,22 @@ model FriendRequest {
   createdAt  DateTime @default(now()) @map("created_at")
   decidedAt  DateTime? @map("decided_at")
 
-  @@unique([fromUserId, toUserId], name: "idx_friend_requests_pending_unique") // OBS: Postgres-partial i SQL; i Prisma kan vi spegla logiken i app-lager eller via native migration.
+  // Viktigt: Postgres-partial UNIQUE (status='pending') hanteras i SQL-migrationen.
+  // Sätt INTE @@unique här – det skulle skärpa till alla statuslägen.
   @@index([toUserId], map: "idx_friend_requests_to_pending")
   @@index([fromUserId], map: "idx_friend_requests_from_pending")
   @@map("friend_requests")
 }
 
 model Friendship {
-  userId    String  @map("user_id")
-  friendId  String  @map("friend_id")
+  userId    String   @map("user_id")
+  friendId  String   @map("friend_id")
   createdAt DateTime @default(now()) @map("created_at")
-  user      User    @relation("UserFriendships", fields: [userId], references: [id])
-  friend    User    @relation("UserFriendships", fields: [friendId], references: [id])
+  user      User     @relation("UserFriendships", fields: [userId], references: [id])
+  friend    User     @relation("UserFriendships", fields: [friendId], references: [id])
 
   @@id([userId, friendId])
-  // Unik parindex (LEAST/GREATEST) finns i SQL; speglas via migration snarare än Prisma DSL.
+  // Unika par (LEAST/GREATEST) finns som index i SQL – kan inte uttryckas i Prisma DSL.
   @@index([userId], map: "idx_friendships_user")
   @@index([friendId], map: "idx_friendships_friend")
   @@map("friendships")
