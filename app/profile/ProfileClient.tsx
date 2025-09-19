@@ -11,6 +11,7 @@ export type FavoriteItem = {
   poster?: string | null;
 };
 
+// Tillåt undefined här så den matchar serverns (page.tsx) DTO exakt.
 export type ProfileDTO = {
   displayName: string | null;
   dob: string | null;            // ISO yyyy-mm-dd
@@ -18,11 +19,9 @@ export type ProfileDTO = {
   locale: string | null;
   uiLanguage: string | null;     // 'sv' | 'en' | ...
   favoriteGenres: string[];
-  favoriteMovie: FavoriteItem | null;
-  favoriteShow: FavoriteItem | null;
+  favoriteMovie?: FavoriteItem | null; // <- optional
+  favoriteShow?: FavoriteItem | null;  // <- optional
 };
-
-type SaveResp = { ok: boolean; message?: string };
 
 type Props = {
   initial: ProfileDTO | null;
@@ -67,14 +66,14 @@ function classNames(...xs: Array<string | false | null | undefined>): string {
   return xs.filter(Boolean).join(' ');
 }
 
-// ——— Tiny TMDB search box (mirrors onboarding behavior) ———
+// ——— Tiny TMDB search box ———
 type SearchItem = { id: number; title: string; year?: string | null; poster?: string | null };
 type SearchRes = { ok: boolean; items: SearchItem[] };
 
 function SearchBox({
   label,
   placeholder,
-  type, // "movie" | "tv"
+  type,
   value,
   onSelect,
   locale = 'sv-SE',
@@ -173,16 +172,16 @@ function SearchBox({
 }
 
 export default function ProfileClient({ initial }: Props) {
-  const [displayName, setDisplayName] = useState<string>(initial?.displayName ?? '');
-  const [dob, setDob] = useState<string>(toInputDate(initial?.dob ?? null));
-  const [uiLanguage, setUiLanguage] = useState<string>(initial?.uiLanguage ?? 'sv');
+  const [displayName, setDisplayName]   = useState<string>(initial?.displayName ?? '');
+  const [dob, setDob]                   = useState<string>(toInputDate(initial?.dob ?? null));
+  const [uiLanguage, setUiLanguage]     = useState<string>(initial?.uiLanguage ?? 'sv');
   const [favoriteGenres, setFavoriteGenres] = useState<string[]>(initial?.favoriteGenres ?? []);
   const [dislikedGenres, setDislikedGenres] = useState<string[]>([]);
-  const [providers, setProviders] = useState<string[]>([]);
-  const [favoriteMovie, setFavoriteMovie] = useState<Fav>(initial?.favoriteMovie ?? null);
-  const [favoriteShow, setFavoriteShow] = useState<Fav>(initial?.favoriteShow ?? null);
+  const [providers, setProviders]           = useState<string[]>([]);
+  const [favoriteMovie, setFavoriteMovie]   = useState<Fav>(initial?.favoriteMovie ?? null);
+  const [favoriteShow, setFavoriteShow]     = useState<Fav>(initial?.favoriteShow ?? null);
   const [busy, setBusy] = useState<boolean>(false);
-  const [msg, setMsg] = useState<string | null>(null);
+  const [msg, setMsg]   = useState<string | null>(null);
 
   // Hydrate (om initial saknar vissa fält)
   useEffect(() => {
