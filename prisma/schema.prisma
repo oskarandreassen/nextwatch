@@ -1,81 +1,61 @@
 // prisma/schema.prisma
-
-// ========== GENERATOR & DATASOURCE ==========
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL") // Neon
+  url      = env("DATABASE_URL")
 }
 
-// ========== ENUMS ==========
-enum Vote {
-  LIKE
-  DISLIKE
-  SKIP
-}
-
-enum TmdbType {
-  movie
-  tv
-}
-
-enum FriendRequestStatus {
-  pending
-  accepted
-  declined
-  cancelled
-}
-
-// ========== MODELS ==========
 model User {
-  id            String    @id
-  email         String?
-  username      String?   @unique
+  id        String    @id
+  email     String?   @unique
+  plan      String    @default("free")
+  planSince DateTime? @map("plan_since")
+  createdAt DateTime  @default(now()) @map("created_at")
+
   emailVerified DateTime? @map("email_verified")
   passwordHash  String?   @map("password_hash")
   lastLoginAt   DateTime? @map("last_login_at")
-  plan          String    @default("free")
-  planSince     DateTime? @map("plan_since")
-  createdAt     DateTime  @default(now()) @map("created_at")
 
-  // Relations
-  profile            Profile?
-  purchases          Purchase[]
-  groups             Group[]         @relation("GroupsCreated")
-  groupMembers       GroupMember[]
-  groupVotes         GroupVote[]
-  ratings            Rating[]
-  watchlist          Watchlist[]
-  sentRequests       FriendRequest[] @relation("FromUser")
-  recvRequests       FriendRequest[] @relation("ToUser")
+  username String? @unique
 
-  // Vänskap – två sidor med OLIKA relationsnamn (krav i Prisma)
-  friendshipsAsUser  Friendship[]    @relation("FriendshipUser")
-  friendshipsAsFriend Friendship[]   @relation("FriendshipFriend")
+  profile   Profile?
+  ratings   Rating[]
+  watchlist watchlist[]
+  purchases Purchase[]
+
+  // Groups
+  groupMembers  GroupMember[] @relation("UserGroupMembers")
+  groupsCreated Group[]       @relation("UserGroupsCreated")
+  groupVotes    GroupVote[]   @relation("UserGroupVotes")
+
+  // Friends
+  friendRequestsSent     FriendRequest[] @relation("FriendRequestsSent")
+  friendRequestsReceived FriendRequest[] @relation("FriendRequestsReceived")
+  friendshipsAsUser      Friendship[]    @relation("FriendshipUser")
+  friendshipsAsFriend    Friendship[]    @relation("FriendshipFriend")
 
   @@map("users")
 }
 
 model Profile {
-  userId            String   @id @map("user_id")
-  user              User     @relation(fields: [userId], references: [id])
-
-  displayName       String?  @map("display_name")
-  dob               DateTime? @db.Date
-  uiLanguage        String    @default("sv")    @map("ui_language")
-  yearPreference    String    @default("all")   @map("year_preference")
-  recycleAfterDays  Int       @default(14)      @map("recycle_after_days")
-  region            String    @default("SE")
-  locale            String    @default("sv-SE")
-  providers         Json      // DB har DEFAULT '[]'::jsonb – behåll default i SQL, inte här
-  favoriteMovie     Json?     @map("favorite_movie")
-  favoriteShow      Json?     @map("favorite_show")
-  favoriteGenres    String[]  @default([])
-  dislikedGenres    String[]  @default([])
-  updatedAt         DateTime  @default(now())   @map("updated_at")
+  userId           String   @id @map("user_id")
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  displayName      String?  @map("display_name")
+  dob              DateTime? @db.Date
+  uiLanguage       String    @default("sv")    @map("ui_language")
+  yearPreference   String    @default("all")   @map("year_preference")
+  recycleAfterDays Int       @default(14)      @map("recycle_after_days")
+  region           String    @default("SE")
+  locale           String    @default("sv-SE")
+  providers        Json
+  favoriteMovie    Json?     @map("favorite_movie")
+  favoriteShow     Json?     @map("favorite_show")
+  favoriteGenres   String[]  @default([])
+  dislikedGenres   String[]  @default([])
+  updatedAt        DateTime  @default(now())   @map("updated_at")
 
   @@map("profiles")
 }
@@ -83,7 +63,7 @@ model Profile {
 model Verification {
   token      String   @id
   userId     String   @map("user_id")
-  user       User     @relation(fields: [userId], references: [id])
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   email      String
   name       String?
   createdAt  DateTime @default(now()) @map("created_at")
@@ -95,9 +75,9 @@ model Verification {
 model Purchase {
   id                    String   @id
   userId                String   @map("user_id")
-  user                  User     @relation(fields: [userId], references: [id])
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   stripePaymentIntentId String?  @map("stripe_payment_intent_id")
-  amountTotal           Int      @default(0)     @map("amount_total") // minor units
+  amountTotal           Int      @default(0)     @map("amount_total")
   currency              String   @default("SEK")
   product               String   @default("lifetime")
   createdAt             DateTime @default(now()) @map("created_at")
@@ -109,10 +89,11 @@ model Purchase {
 model Group {
   code       String   @id
   createdBy  String   @map("created_by")
-  creator    User     @relation("GroupsCreated", fields: [createdBy], references: [id])
+  creator    User     @relation("UserGroupsCreated", fields: [createdBy], references: [id], onDelete: Cascade)
   createdAt  DateTime @default(now()) @map("created_at")
-  members    GroupMember[]
-  votes      GroupVote[]
+
+  members GroupMember[]
+  votes   GroupVote[]
 
   @@map("groups")
 }
@@ -122,11 +103,22 @@ model GroupMember {
   userId    String   @map("user_id")
   joinedAt  DateTime @default(now()) @map("joined_at")
 
-  group     Group @relation(fields: [groupCode], references: [code])
-  user      User  @relation(fields: [userId], references: [id])
+  group Group @relation(fields: [groupCode], references: [code], onDelete: Cascade)
+  user  User  @relation("UserGroupMembers", fields: [userId], references: [id], onDelete: Cascade)
 
   @@id([groupCode, userId])
   @@map("group_members")
+}
+
+enum TmdbType {
+  movie
+  tv
+}
+
+enum Vote {
+  LIKE
+  DISLIKE
+  SKIP
 }
 
 model GroupVote {
@@ -137,27 +129,55 @@ model GroupVote {
   vote      Vote
   decidedAt DateTime @default(now()) @map("decided_at")
 
-  group     Group @relation(fields: [groupCode], references: [code])
-  user      User  @relation(fields: [userId], references: [id])
+  group Group @relation(fields: [groupCode], references: [code], onDelete: Cascade)
+  user  User  @relation("UserGroupVotes", fields: [userId], references: [id], onDelete: Cascade)
 
   @@id([groupCode, userId, tmdbId, tmdbType])
   @@index([groupCode, tmdbId, tmdbType], map: "idx_group_votes_group_tmdb")
   @@map("group_votes")
 }
 
+model watchlist {
+  id        String  @id @default(cuid())
+  userId    String  @map("user_id")
+  user      User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tmdbId    Int     @map("tmdb_id")
+  mediaType String  @map("media_type")
+
+  @@unique([userId, tmdbId, mediaType], name: "watchlist_user_tmdb_media_unique")
+  @@map("watchlist")
+}
+
+model Rating {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tmdbId    Int      @map("tmdb_id")
+  mediaType String   @map("media_type")
+  value     Int
+
+  @@index([userId, tmdbId, mediaType], map: "idx_ratings_user_tmdb")
+  @@map("ratings")
+}
+
+enum FriendRequestStatus {
+  pending
+  accepted
+  declined
+  cancelled
+}
+
 model FriendRequest {
   id         String  @id @db.Uuid @default(dbgenerated("gen_random_uuid()"))
   fromUserId String  @map("from_user_id")
   toUserId   String  @map("to_user_id")
-  fromUser   User    @relation("FromUser", fields: [fromUserId], references: [id])
-  toUser     User    @relation("ToUser", fields: [toUserId], references: [id])
-  status     FriendRequestStatus @default(pending)
-  createdAt  DateTime @default(now()) @map("created_at")
+  status     String  @default("pending")
+  createdAt  DateTime  @default(now()) @map("created_at")
   decidedAt  DateTime? @map("decided_at")
 
-  // Partial UNIQUE (status='pending') och extra index finns i SQL-migrationen.
-  @@index([toUserId], map: "idx_friend_requests_to_pending")
-  @@index([fromUserId], map: "idx_friend_requests_from_pending")
+  fromUser User @relation("FriendRequestsSent", fields: [fromUserId], references: [id], onDelete: Cascade)
+  toUser   User @relation("FriendRequestsReceived", fields: [toUserId], references: [id], onDelete: Cascade)
+
   @@map("friend_requests")
 }
 
@@ -166,37 +186,9 @@ model Friendship {
   friendId  String   @map("friend_id")
   createdAt DateTime @default(now()) @map("created_at")
 
-  // Två separata relationer med olika namn
-  user      User     @relation("FriendshipUser",   fields: [userId],   references: [id])
-  friend    User     @relation("FriendshipFriend", fields: [friendId], references: [id])
+  user   User @relation("FriendshipUser", fields: [userId], references: [id], onDelete: Cascade)
+  friend User @relation("FriendshipFriend", fields: [friendId], references: [id], onDelete: Cascade)
 
   @@id([userId, friendId])
-  // Unik LEAST/GREATEST-indexet ligger i SQL (kan ej uttryckas i Prisma DSL)
-  @@index([userId], map: "idx_friendships_user")
-  @@index([friendId], map: "idx_friendships_friend")
   @@map("friendships")
-}
-
-// OBS: Vi speglar watchlistens unika sammansättning som primärnyckel
-// så vi inte pådyvlar ett "id" om tabellen saknar det.
-model Watchlist {
-  userId    String  @map("user_id")
-  tmdbId    Int     @map("tmdb_id")
-  mediaType String  @map("media_type")
-  user      User    @relation(fields: [userId], references: [id])
-
-  @@id([userId, tmdbId, mediaType])
-  @@map("watchlist")
-}
-
-model Rating {
-  id        String   @id @default(cuid())
-  userId    String   @map("user_id")
-  user      User     @relation(fields: [userId], references: [id])
-  tmdbId    Int      @map("tmdb_id")
-  mediaType String   @map("media_type")
-  value     Int
-
-  @@index([userId, tmdbId, mediaType], map: "idx_ratings_user_tmdb")
-  @@map("ratings")
 }
