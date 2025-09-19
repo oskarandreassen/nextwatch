@@ -1,43 +1,92 @@
-'use client';
+// app/components/landing/HeroReel.tsx
+"use client";
 
-import * as React from 'react';
-import Image from 'next/image';
+import { useEffect, useState } from "react";
+import Image from "next/image";
 
-const IMAGES: string[] = [
-  // lätta tmdb-posterexempel – kan bytas mot dina egna
-  'https://image.tmdb.org/t/p/w342/ifRFLx83Xk1DcwAS3OScgI6HmWO.jpg',
-  'https://image.tmdb.org/t/p/w342/8QVDXDiOGHRcAD4oM6MXjE0osSj.jpg',
-  'https://image.tmdb.org/t/p/w342/628Dep6AxEtDxjZoGP78TsOxYbK.jpg',
-  'https://image.tmdb.org/t/p/w342/kqjL17yufvn9OVLyXYpvtyrFfak.jpg',
-  'https://image.tmdb.org/t/p/w342/9X7YweCJw3q8Mcf6GadxReFEksM.jpg',
-  'https://image.tmdb.org/t/p/w342/6oom5QYQ2yQTMJIbnvbkBL9cHo6.jpg',
-];
+type Poster = { id: number; title: string; year: string; src: string };
 
-export default function HeroReel() {
+type Props = {
+  /** Lägre värde = snabbare scroll. Default 16000ms för ett helt varv. */
+  durationMs?: number;
+  /** Extra klasser för positionering i sidan */
+  className?: string;
+};
+
+/** Minimal, sömlös poster-reel för landing. */
+export default function HeroReel({ durationMs = 16000, className }: Props) {
+  const [items, setItems] = useState<Poster[]>([]);
+
+  useEffect(() => {
+    let on = true;
+    (async () => {
+      try {
+        const res = await fetch("/api/tmdb/landing-posters", { cache: "no-store" });
+        if (!res.ok) return;
+        const data = (await res.json()) as { ok?: boolean; posters?: Poster[] };
+        if (on && data?.ok && data.posters) setItems(data.posters);
+      } catch {
+        // tyst fail
+      }
+    })();
+    return () => {
+      on = false;
+    };
+  }, []);
+
+  // Duplicera listan för ändlös loop
+  const loop = items.length > 0 ? [...items, ...items] : [];
+
+  // Bas-fallback om en enstaka bild fallerar vid client-render
+  const fallback =
+    "data:image/svg+xml;utf8," +
+    encodeURIComponent(
+      `<svg xmlns='http://www.w3.org/2000/svg' width='228' height='342'><rect width='100%' height='100%' rx='12' fill='black'/><text x='50%' y='50%' dominant-baseline='middle' text-anchor='middle' fill='white' opacity='0.35' font-family='Inter,system-ui,Segoe UI,Helvetica,Arial' font-size='14'>NextWatch</text></svg>`
+    );
+
   return (
-    <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
-      <div className="absolute inset-0 bg-gradient-to-b from-black/60 via-black/30 to-black/80" />
-      <div className="animate-[scrollX_40s_linear_infinite] flex gap-4 px-4 py-8">
-        {[...IMAGES, ...IMAGES].map((src, i) => (
+    <div className={["relative h-[280px] sm:h-[340px] md:h-[420px] w-full overflow-hidden", className].filter(Boolean).join(" ")}>
+      {/* rullband */}
+      <div
+        className="absolute left-0 top-0 flex h-full w-max items-center gap-4 will-change-transform"
+        style={{ animation: `nw-reel ${Math.max(6000, durationMs)}ms linear infinite` }}
+        aria-hidden
+      >
+        {loop.map((p, i) => (
           <div
-            key={i}
-            className="relative h-60 w-40 shrink-0 overflow-hidden rounded-xl bg-neutral-800/40"
+            key={`${p.id}-${i}`}
+            className="relative h-[85%] w-[150px] sm:w-[180px] md:w-[210px] shrink-0 overflow-hidden rounded-2xl border border-white/10 bg-white/5 shadow-lg"
+            title={p.title}
           >
             <Image
-              src={src}
-              alt=""
+              src={p.src}
+              alt={p.title}
               fill
-              sizes="(max-width: 768px) 25vw, 10vw"
-              className="object-cover opacity-80"
-              priority={false}
+              sizes="(max-width: 640px) 150px, (max-width: 768px) 180px, 210px"
+              className="object-cover"
+              onError={(e) => {
+                // säkerställ att inga svarta rutor visas
+                const el = e.currentTarget as HTMLImageElement & { src: string };
+                if (el && el.src !== fallback) el.src = fallback;
+              }}
+              priority={i < 8}
             />
+            {/* liten edge-glow */}
+            <div className="pointer-events-none absolute inset-0 bg-gradient-to-tr from-white/0 via-white/0 to-white/5" />
           </div>
         ))}
       </div>
-      <style>{`
-        @keyframes scrollX {
-          0% { transform: translateX(0); }
-          100% { transform: translateX(-50%); }
+
+      {/* mask/gradienter för mjukare kanter och läsbar hero */}
+      <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-black/40 via-black/20 to-black/60" />
+      <style jsx>{`
+        @keyframes nw-reel {
+          0% {
+            transform: translateX(0);
+          }
+          100% {
+            transform: translateX(-50%);
+          }
         }
       `}</style>
     </div>
