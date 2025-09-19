@@ -1,14 +1,11 @@
 // app/page.tsx
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import NextDynamic from "next/dynamic";
+import HeroReel from "./components/landing/HeroReel";
 import LoginCard from "./components/auth/LoginCard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-// Ladda hero-klientkomponenten utan SSR
-const HeroReel = NextDynamic(() => import("./components/landing/HeroReel"), { ssr: false });
 
 export default async function HomePage() {
   // Regler: alltid await cookies() i App Router (server)
@@ -25,6 +22,7 @@ export default async function HomePage() {
 
   return (
     <div className="relative min-h-dvh">
+      {/* Snabb hero-reel (klientkomponent) */}
       <HeroReel durationMs={12000} />
 
       <div className="relative z-10 mx-auto max-w-5xl px-6 pt-24 pb-16 text-center">
