@@ -9,7 +9,8 @@ export default function BottomTabs() {
   const pathname = usePathname();
 
   return (
-    <div className="sticky bottom-0 z-40 border-t border-neutral-800/80 bg-neutral-900/70 backdrop-blur">
+    // sänkt från z-40 till z-20 så modaler/sheets (z-30+) alltid hamnar över
+    <div className="sticky bottom-0 z-20 border-t border-neutral-800/80 bg-neutral-900/70 backdrop-blur">
       <div className="mx-auto grid max-w-3xl grid-cols-5 gap-1 px-2 py-1 pb-[calc(env(safe-area-inset-bottom)+8px)]">
         {navItems.map((item) => {
           const Icon = item.icon;
