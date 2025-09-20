@@ -19,7 +19,6 @@ function has<T extends string>(o: unknown, key: T): o is Record<T, unknown> {
 }
 
 /** ---------- types (klient) ---------- */
-// Dessa två bas-typerna speglar dina server-props. Behållna för UI-kompabilitet.
 type PublicMember = {
   userId: string;
   username: string | null;
@@ -61,8 +60,6 @@ async function parseFriendsList(res: Response): Promise<Api<FriendsListResp>> {
   try {
     const data = (await res.json()) as unknown;
 
-    // Förväntad ny form: { ok:true, friends:[{ other:{...} }], pendingIn:[], pendingOut:[] }
-    // Äldre platt form stöds också.
     if (isRecord(data)) {
       const friendsRaw = has(data, "friends") && Array.isArray(data.friends) ? data.friends : [];
       const inRaw = has(data, "pendingIn") && Array.isArray(data.pendingIn) ? data.pendingIn : [];
@@ -71,7 +68,6 @@ async function parseFriendsList(res: Response): Promise<Api<FriendsListResp>> {
       const friends: FriendsListUser[] = friendsRaw
         .filter(isRecord)
         .map((row) => {
-          // Ny: rad.other finns
           if (isRecord(row.other)) {
             const other = row.other as Record<string, unknown>;
             return {
@@ -80,14 +76,12 @@ async function parseFriendsList(res: Response): Promise<Api<FriendsListResp>> {
               displayName: (other.displayName ?? null) as string | null,
             };
           }
-          // Platt fallback
           return {
             id: String(row.id ?? row.userId ?? ""),
             username: (row.username ?? null) as string | null,
             displayName: (row.displayName ?? null) as string | null,
           };
         })
-               // filtrera bort tomma id
         .filter((u) => u.id.length > 0);
 
       const pendingIn = inRaw
@@ -129,7 +123,6 @@ async function parseFriendsList(res: Response): Promise<Api<FriendsListResp>> {
       return { ok: true, friends, pendingIn, pendingOut };
     }
 
-    // Äldre: rent array-svar
     if (Array.isArray(data)) {
       const friends: FriendsListUser[] = data
         .filter(isRecord)
@@ -223,6 +216,25 @@ async function joinGroup(code: string): Promise<Api<{ code: string }>> {
   }
 }
 
+async function createGroup(name?: string): Promise<Api<{ code: string }>> {
+  const res = await fetch("/api/group/create", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(name ? { name } : {}),
+  });
+  if (!res.ok) return { ok: false, message: "Kunde inte skapa gruppen." };
+  try {
+    const data = (await res.json()) as unknown;
+    if (isRecord(data) && typeof data.code === "string") return { ok: true, code: data.code };
+    if (isRecord(data) && isRecord(data.group) && typeof data.group.code === "string") {
+      return { ok: true, code: String(data.group.code) };
+    }
+    return { ok: false, message: "Felaktigt svar." };
+  } catch {
+    return { ok: false, message: "Kunde inte tolka svar." };
+  }
+}
+
 async function leaveGroup(): Promise<Api<{ success: true }>> {
   const res = await fetch("/api/group/leave", { method: "POST" });
   if (!res.ok) return { ok: false, message: "Kunde inte lämna gruppen." };
@@ -279,7 +291,6 @@ export default function GroupClient({ initial }: { initial: GroupInitial }) {
       const resp = await friendsList();
       if (!resp.ok) {
         setError(resp.message ?? "Kunde inte hämta vänner.");
-        // defensiva defaults (förhindra map på undefined)
         setFriends([]);
         setPendingIn([]);
         setPendingOut([]);
@@ -294,7 +305,7 @@ export default function GroupClient({ initial }: { initial: GroupInitial }) {
   const handleCreate = async (name?: string) => {
     setBusy(true);
     setError(null);
-    const resp = await joinGroup(name ?? "");
+    const resp = await createGroup(name);
     setBusy(false);
     if (!resp.ok) return setError(resp.message ?? "Kunde inte skapa gruppen.");
     setCode(resp.code);
@@ -339,7 +350,6 @@ export default function GroupClient({ initial }: { initial: GroupInitial }) {
       setError(resp.message ?? "Kunde inte lägga till vän.");
       return;
     }
-    // Markera direkt i UI
     setSentToIds((prev) => new Set(prev).add(userId));
   };
 
@@ -353,7 +363,6 @@ export default function GroupClient({ initial }: { initial: GroupInitial }) {
         setResults([]);
         return;
       }
-      // TODO: koppla till /api/friends/search
       setResults([]);
     }, 250);
     return () => {
@@ -387,7 +396,7 @@ export default function GroupClient({ initial }: { initial: GroupInitial }) {
     window.addEventListener("touchstart", onActivity);
     document.addEventListener("visibilitychange", onVis);
 
-    poke(); // start
+    poke();
 
     return () => {
       window.removeEventListener("mousemove", onActivity);
@@ -603,7 +612,6 @@ function FriendsTab({
   setQ: (q: string) => void;
   results: SearchUser[];
 }) {
-  // all .map kör på arrayer som defaultas till []
   return (
     <div className="space-y-6">
       <div>
