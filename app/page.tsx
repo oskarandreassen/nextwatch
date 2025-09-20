@@ -22,7 +22,7 @@ export default async function HomePage() {
   return (
     <div className="relative">
       {/* Komprimerad hero-reel */}
-      <HeroReel durationMs={48000} heightClass="h-[180px] sm:h-[220px] md:h-[260px]" />
+      <HeroReel durationMs={72000} heightClass="h-[180px] sm:h-[220px] md:h-[260px]" />
 
       {/* Innehåll i två kolumner för att undvika scroll */}
       <section className="relative z-10 mx-auto max-w-6xl px-4 md:px-6 pt-6 md:pt-8 pb-6">
