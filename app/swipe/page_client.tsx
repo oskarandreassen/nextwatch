@@ -389,12 +389,18 @@ export default function SwipePageClient() {
 
       {/* Rate overlay */}
       {rateOpen && cards[0] && (
-        <div className="fixed inset-0 z-40+ flex items-end justify-center bg-black/50 backdrop-blur-sm">
-          <div className="mb-6 w-[92%] max-w-md rounded-2xl border border-white/10 bg-neutral-900 p-4 shadow-xl">
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-[80] flex items-end justify-center bg-black/50 backdrop-blur-sm"
+        >
+          <div className="w-[92%] max-w-md rounded-2xl border border-white/10 bg-neutral-900 p-4 shadow-xl
+                          mb-[calc(env(safe-area-inset-bottom)+64px)]">
             <div className="mb-2 text-sm font-semibold text-white">
               Betygsätt: {cards[0].title}
               {cards[0].year ? <span className="opacity-70"> ({cards[0].year})</span> : null}
             </div>
+
             <div className="flex items-center gap-3">
               <span className="text-xs opacity-80">1</span>
               <input
@@ -408,7 +414,11 @@ export default function SwipePageClient() {
               />
               <span className="text-xs opacity-80">10</span>
             </div>
-            <div className="mt-2 text-sm">Valt betyg: <span className="font-semibold">{rateValue}/10</span></div>
+
+            <div className="mt-2 text-sm">
+              Valt betyg: <span className="font-semibold">{rateValue}/10</span>
+            </div>
+
             <div className="mt-4 flex justify-end gap-3">
               <button
                 onClick={() => setRateOpen(false)}
@@ -426,6 +436,7 @@ export default function SwipePageClient() {
           </div>
         </div>
       )}
+
 
       {/* Top card */}
       {cards[0] ? (
