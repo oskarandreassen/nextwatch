@@ -4,57 +4,29 @@
 import { useEffect, useRef, useState } from "react";
 import type { GroupInitial as BaseGroupInitial, PublicMember as BasePublicMember } from "./page";
 
-/** UI-hjälpare */
-function classNames(...xs: string[]): string {
+/** ------- helpers ------- */
+function cx(...xs: string[]): string {
   return xs.filter(Boolean).join(" ");
 }
-/** Läs cookie-värde på klientsidan */
 function getCookie(name: string): string | null {
   if (typeof document === "undefined") return null;
   const m = document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`));
   return m ? decodeURIComponent(m[1]) : null;
 }
-/** Type guards */
-function isObj(x: unknown): x is Record<string, unknown> {
+function isRecord(x: unknown): x is Record<string, unknown> {
   return typeof x === "object" && x !== null;
 }
-function hasKey<T extends string>(o: unknown, key: T): o is Record<T, unknown> {
-  return isObj(o) && key in o;
+function has<T extends string>(o: unknown, key: T): o is Record<T, unknown> {
+  return isRecord(o) && key in o;
 }
 
-/** Utöka server-typer lokalt (utan att kräva serverändringar) */
-type PublicMember = BasePublicMember & {
-  /** valfri – om servern inte skickar providers så renderar vi bara inget */
-  providers?: string[];
-};
+/** ------- types (klient) ------- */
+type PublicMember = BasePublicMember & { providers?: string[] };
+type GroupInitial = BaseGroupInitial & { region?: string };
 
-type GroupInitial = BaseGroupInitial & {
-  /** valfri – om servern inte skickar region så visar vi “—” */
-  region?: string;
-};
-
-/** API-typer (klientens tolkning) */
 type ApiOk = { ok: true };
 type ApiErr = { ok: false; message?: string };
 type Api<T> = (ApiOk & T) | ApiErr;
-
-type MembersRespNew = {
-  code: string;
-  members: PublicMember[];
-};
-type MembersRespLegacy = {
-  group: { code: string; region?: string };
-  members: PublicMember[];
-};
-
-type SearchStatus = "NONE" | "PENDING_OUT" | "PENDING_IN" | "ACCEPTED";
-
-type SearchUser = {
-  id: string;
-  username: string | null;
-  displayName: string | null;
-  status: SearchStatus;
-};
 
 type FriendsListUser = {
   id: string;
@@ -68,131 +40,84 @@ type FriendsListResp = {
   pendingOut: { requestId: string; to: FriendsListUser }[];
 };
 
-/** ---- API-kall (toleranta mot olika svar) ---- */
+type SearchStatus = "NONE" | "PENDING_OUT" | "PENDING_IN" | "ACCEPTED";
+type SearchUser = {
+  id: string;
+  username: string | null;
+  displayName: string | null;
+  status: SearchStatus;
+};
 
-async function getMembers(code: string | null): Promise<
-  Api<{ code: string; region?: string; members: PublicMember[] }>
-> {
-  const url = code ? `/api/group/members?code=${encodeURIComponent(code)}` : "/api/group/members";
-  const res = await fetch(url, { cache: "no-store" });
-  if (!res.ok) {
-    let message = "Kunde inte ladda gruppen.";
-    try {
-      const body = (await res.json()) as { message?: string };
-      if (body?.message) message = body.message;
-    } catch {
-      /* ignore */
-    }
-    return { ok: false, message };
-  }
-
+/** ------- API (tolerant parsing) ------- */
+async function parseFriendsList(res: Response): Promise<Api<FriendsListResp>> {
+  if (!res.ok) return { ok: false, message: "Kunde inte hämta vänner." };
   try {
     const data = (await res.json()) as unknown;
-    if (hasKey(data, "code") && typeof (data as { code?: unknown }).code === "string") {
-      const d = data as MembersRespNew;
-      return { ok: true, code: d.code, members: d.members };
-    }
-    if (hasKey(data, "group") && isObj((data as MembersRespLegacy).group)) {
-      const d = data as MembersRespLegacy;
-      return { ok: true, code: d.group.code, region: d.group.region, members: d.members };
-    }
-  } catch {
-    return { ok: false, message: "Felaktigt svar från servern." };
-  }
-  return { ok: false, message: "Okänt svar." };
-}
 
-async function joinGroup(code: string): Promise<Api<{ code: string }>> {
-  const res = await fetch("/api/group/join", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ code }),
-  });
-  if (!res.ok) {
-    let message = "Kunde inte gå med i grupp.";
-    try {
-      const body = (await res.json()) as { message?: string };
-      if (body?.message) message = body.message;
-    } catch {
-      /* ignore */
-    }
-    return { ok: false, message };
-  }
-  try {
-    const data = (await res.json()) as unknown;
-    if (hasKey(data, "code") && typeof (data as { code?: unknown }).code === "string") {
-      return { ok: true, code: (data as { code: string }).code };
-    }
-    if (hasKey(data, "group") && isObj((data as { group?: unknown }).group)) {
-      const g = (data as { group: { code?: string } }).group;
-      return { ok: true, code: g.code ?? "" };
-    }
-    if (hasKey(data, "ok") && (data as { ok: unknown }).ok === false) {
-      return { ok: false, message: "Ett fel uppstod." };
-    }
-  } catch {
-    /* ignore */
-  }
-  return { ok: false, message: "Oväntat svar från servern." };
-}
+    // Vanlig form: { ok:true, friends:[], pendingIn:[], pendingOut:[] }
+    if (isRecord(data)) {
+      const friendsRaw = has(data, "friends") && Array.isArray(data.friends) ? data.friends : [];
+      const inRaw = has(data, "pendingIn") && Array.isArray(data.pendingIn) ? data.pendingIn : [];
+      const outRaw = has(data, "pendingOut") && Array.isArray(data.pendingOut) ? data.pendingOut : [];
 
-async function leaveGroup(): Promise<Api<{ success: true }>> {
-  const res = await fetch("/api/group/leave", { method: "POST" });
-  if (!res.ok) {
-    let message = "Kunde inte lämna gruppen.";
-    try {
-      const body = (await res.json()) as { message?: string };
-      if (body?.message) message = body.message;
-    } catch {
-      /* ignore */
-    }
-    return { ok: false, message };
-  }
-  return { ok: true, success: true };
-}
+      const friends: FriendsListUser[] = friendsRaw
+        .filter(isRecord)
+        .map((u) => ({
+          id: String(u.id ?? ""),
+          username: (u.username ?? null) as string | null,
+          displayName: (u.displayName ?? null) as string | null,
+        }))
+        .filter((u) => u.id.length > 0);
 
-async function createGroup(name?: string): Promise<Api<{ code: string }>> {
-  const res = await fetch("/api/group/create", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(name ? { name } : {}),
-  });
-  if (!res.ok) {
-    let message = "Kunde inte skapa grupp.";
-    try {
-      const body = (await res.json()) as { message?: string };
-      if (body?.message) message = body.message;
-    } catch {
-      /* ignore */
+      const pendingIn = inRaw
+        .filter(isRecord)
+        .map((r) => ({
+          requestId: String(r.requestId ?? r.id ?? ""),
+          from: {
+            id: String((isRecord(r.from) ? r.from.id : r.fromId) ?? ""),
+            username: (isRecord(r.from) ? (r.from.username ?? null) : null) as string | null,
+            displayName: (isRecord(r.from) ? (r.from.displayName ?? null) : null) as string | null,
+          },
+        }))
+        .filter((r) => r.requestId.length > 0 && r.from.id.length > 0);
+
+      const pendingOut = outRaw
+        .filter(isRecord)
+        .map((r) => ({
+          requestId: String(r.requestId ?? r.id ?? ""),
+          to: {
+            id: String((isRecord(r.to) ? r.to.id : r.toId) ?? ""),
+            username: (isRecord(r.to) ? (r.to.username ?? null) : null) as string | null,
+            displayName: (isRecord(r.to) ? (r.to.displayName ?? null) : null) as string | null,
+          },
+        }))
+        .filter((r) => r.requestId.length > 0 && r.to.id.length > 0);
+
+      return { ok: true, friends, pendingIn, pendingOut };
     }
-    return { ok: false, message };
-  }
-  try {
-    const data = (await res.json()) as unknown;
-    if (hasKey(data, "code") && typeof (data as { code?: unknown }).code === "string") {
-      return { ok: true, code: (data as { code: string }).code };
+
+    // Extrem legacy: [] → tolka som “friends”
+    if (Array.isArray(data)) {
+      const friends: FriendsListUser[] = data
+        .filter(isRecord)
+        .map((u) => ({
+          id: String(u.id ?? ""),
+          username: (u.username ?? null) as string | null,
+          displayName: (u.displayName ?? null) as string | null,
+        }))
+        .filter((u) => u.id.length > 0);
+      return { ok: true, friends, pendingIn: [], pendingOut: [] };
     }
-    if (hasKey(data, "group") && isObj((data as { group?: unknown }).group)) {
-      const g = (data as { group: { code?: string } }).group;
-      return { ok: true, code: g.code ?? "" };
-    }
-    if (hasKey(data, "ok") && (data as { ok: unknown }).ok === false) {
-      return { ok: false, message: "Ett fel uppstod." };
-    }
+
+    return { ok: false, message: "Felaktigt svar." };
   } catch {
-    /* ignore */
+    return { ok: false, message: "Kunde inte tolka svar." };
   }
-  return { ok: false, message: "Oväntat svar från servern." };
 }
 
 async function friendsList(): Promise<Api<FriendsListResp>> {
   const res = await fetch("/api/friends/list", { cache: "no-store" });
-  if (!res.ok) return { ok: false, message: "Kunde inte hämta vänner." };
-  try {
-    return (await res.json()) as Api<FriendsListResp>;
-  } catch {
-    return { ok: false, message: "Felaktigt svar från servern." };
-  }
+  return parseFriendsList(res);
 }
 
 async function friendRequestById(userId: string): Promise<Api<{ requestId: string }>> {
@@ -210,70 +135,118 @@ async function friendRequestById(userId: string): Promise<Api<{ requestId: strin
     }
   }
   try {
-    return (await res.json()) as Api<{ requestId: string }>;
+    const data = (await res.json()) as unknown;
+    if (isRecord(data) && data.ok === true) {
+      const requestId = String((data as Record<string, unknown>).requestId ?? "");
+      return { ok: true, requestId: requestId || "pending" };
+    }
+    return { ok: false, message: "Oväntat svar." };
   } catch {
-    return { ok: false, message: "Felaktigt svar från servern." };
+    return { ok: false, message: "Kunde inte tolka svar." };
   }
 }
 
-async function friendsSearch(q: string): Promise<Api<{ users: SearchUser[] }>> {
-  const res = await fetch(`/api/friends/search?q=${encodeURIComponent(q)}`, { cache: "no-store" });
-  if (!res.ok) return { ok: false, message: "Sökningen misslyckades." };
+async function getMembers(code: string | null): Promise<
+  Api<{ code: string; region?: string; members: PublicMember[] }>
+> {
+  const url = code ? `/api/group/members?code=${encodeURIComponent(code)}` : "/api/group/members";
+  const res = await fetch(url, { cache: "no-store" });
+  if (!res.ok) return { ok: false, message: "Kunde inte ladda gruppen." };
   try {
-    return (await res.json()) as Api<{ users: SearchUser[] }>;
+    const data = (await res.json()) as unknown;
+    if (isRecord(data) && typeof data.code === "string") {
+      return { ok: true, code: data.code, region: (data.region as string | undefined) ?? undefined, members: (data.members as PublicMember[]) ?? [] };
+    }
+    if (isRecord(data) && isRecord(data.group) && typeof data.group.code === "string") {
+      return {
+        ok: true,
+        code: String(data.group.code),
+        region: (data.group.region as string | undefined) ?? undefined,
+        members: (data.members as PublicMember[]) ?? [],
+      };
+    }
+    return { ok: false, message: "Felaktigt svar." };
   } catch {
-    return { ok: false, message: "Felaktigt svar från servern." };
+    return { ok: false, message: "Kunde inte tolka svar." };
   }
 }
 
-/** ---- Komponent ---- */
+async function joinGroup(code: string): Promise<Api<{ code: string }>> {
+  const res = await fetch("/api/group/join", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ code }),
+  });
+  if (!res.ok) return { ok: false, message: "Kunde inte gå med i grupp." };
+  try {
+    const data = (await res.json()) as unknown;
+    if (isRecord(data) && typeof data.code === "string") return { ok: true, code: data.code };
+    if (isRecord(data) && isRecord(data.group) && typeof data.group.code === "string") {
+      return { ok: true, code: String(data.group.code) };
+    }
+    return { ok: false, message: "Felaktigt svar." };
+  } catch {
+    return { ok: false, message: "Kunde inte tolka svar." };
+  }
+}
 
+async function leaveGroup(): Promise<Api<{ success: true }>> {
+  const res = await fetch("/api/group/leave", { method: "POST" });
+  if (!res.ok) return { ok: false, message: "Kunde inte lämna gruppen." };
+  return { ok: true, success: true };
+}
+
+async function createGroup(name?: string): Promise<Api<{ code: string }>> {
+  const res = await fetch("/api/group/create", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(name ? { name } : {}),
+  });
+  if (!res.ok) return { ok: false, message: "Kunde inte skapa grupp." };
+  try {
+    const data = (await res.json()) as unknown;
+    if (isRecord(data) && typeof data.code === "string") return { ok: true, code: data.code };
+    if (isRecord(data) && isRecord(data.group) && typeof data.group.code === "string") {
+      return { ok: true, code: String(data.group.code) };
+    }
+    return { ok: false, message: "Felaktigt svar." };
+  } catch {
+    return { ok: false, message: "Kunde inte tolka svar." };
+  }
+}
+
+/** ------- component ------- */
 export default function GroupClient({ initial }: { initial: GroupInitial }) {
   const [tab, setTab] = useState<"group" | "friends">("group");
 
   const [code, setCode] = useState<string | null>(initial.code);
   const [region, setRegion] = useState<string | undefined>(initial.region);
-  const [members, setMembers] = useState<PublicMember[]>(
-    Array.isArray(initial.members) ? initial.members.map((m) => ({ ...m })) : []
-  );
+  const [members, setMembers] = useState<PublicMember[]>(Array.isArray(initial.members) ? initial.members : []);
 
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<boolean>(false);
 
-  // Friends state
-  const [friends, setFriends] = useState<FriendsListUser[]>([]);
-  const [pendingIn, setPendingIn] = useState<{ requestId: string; from: FriendsListUser }[]>([]);
-  const [pendingOut, setPendingOut] = useState<{ requestId: string; to: FriendsListUser }[]>([]);
-
-  // Mitt userId (för att dölja +Add på mig själv)
+  // current user
   const [meUserId, setMeUserId] = useState<string | null>(null);
-
-  // Search state
-  const [q, setQ] = useState<string>("");
-  const [results, setResults] = useState<SearchUser[]>([]);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // Läs in nw_uid från cookies en gång
   useEffect(() => {
     const uid = getCookie("nw_uid");
     if (uid) setMeUserId(uid);
   }, []);
 
-  // Ladda friends-listan när man går in på fliken
-  useEffect(() => {
-    if (tab !== "friends") return;
-    (async () => {
-      const resp = await friendsList();
-      if (!resp.ok) {
-        setError(resp.message ?? "Kunde inte hämta vänner.");
-        return;
-      }
-      setFriends(resp.friends);
-      setPendingIn(resp.pendingIn);
-      setPendingOut(resp.pendingOut);
-    })();
-  }, [tab]);
+  // friends lists
+  const [friends, setFriends] = useState<FriendsListUser[]>([]);
+  const [pendingIn, setPendingIn] = useState<{ requestId: string; from: FriendsListUser }[]>([]);
+  const [pendingOut, setPendingOut] = useState<{ requestId: string; to: FriendsListUser }[]>([]);
 
+  // local UX marker: requests we just sent from Group-tab
+  const [sentToIds, setSentToIds] = useState<Set<string>>(new Set());
+
+  // search
+  const [q, setQ] = useState<string>("");
+  const [results, setResults] = useState<SearchUser[]>([]);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // load members
   const refreshMembers = async () => {
     if (!code) return;
     const data = await getMembers(code);
@@ -285,15 +258,31 @@ export default function GroupClient({ initial }: { initial: GroupInitial }) {
     }
   };
 
+  // switch tabs → load friends lists
+  useEffect(() => {
+    if (tab !== "friends") return;
+    (async () => {
+      const resp = await friendsList();
+      if (!resp.ok) {
+        setError(resp.message ?? "Kunde inte hämta vänner.");
+        // defensiva defaults (förhindra map på undefined)
+        setFriends([]);
+        setPendingIn([]);
+        setPendingOut([]);
+        return;
+      }
+      setFriends(resp.friends ?? []);
+      setPendingIn(resp.pendingIn ?? []);
+      setPendingOut(resp.pendingOut ?? []);
+    })();
+  }, [tab]);
+
   const handleCreate = async (name?: string) => {
     setBusy(true);
     setError(null);
     const resp = await createGroup(name);
     setBusy(false);
-    if (!resp.ok) {
-      setError(resp.message ?? "Kunde inte skapa gruppen.");
-      return;
-    }
+    if (!resp.ok) return setError(resp.message ?? "Kunde inte skapa gruppen.");
     setCode(resp.code);
     await refreshMembers();
   };
@@ -303,10 +292,7 @@ export default function GroupClient({ initial }: { initial: GroupInitial }) {
     setError(null);
     const resp = await leaveGroup();
     setBusy(false);
-    if (!resp.ok) {
-      setError(resp.message ?? "Kunde inte lämna gruppen.");
-      return;
-    }
+    if (!resp.ok) return setError(resp.message ?? "Kunde inte lämna gruppen.");
     setCode(null);
     setMembers([]);
   };
@@ -316,10 +302,7 @@ export default function GroupClient({ initial }: { initial: GroupInitial }) {
     setError(null);
     const resp = await joinGroup(groupCode);
     setBusy(false);
-    if (!resp.ok) {
-      setError(resp.message ?? "Kunde inte gå med i gruppen.");
-      return;
-    }
+    if (!resp.ok) return setError(resp.message ?? "Kunde inte gå med i gruppen.");
     setCode(resp.code);
     await refreshMembers();
   };
@@ -328,16 +311,21 @@ export default function GroupClient({ initial }: { initial: GroupInitial }) {
     try {
       await navigator.clipboard.writeText(codeToCopy);
     } catch {
-      // ignore
+      /* ignore */
     }
   };
 
   const quickAdd = async (userId: string) => {
     const resp = await friendRequestById(userId);
-    if (!resp.ok) setError(resp.message ?? "Kunde inte lägga till vän.");
+    if (!resp.ok) {
+      setError(resp.message ?? "Kunde inte lägga till vän.");
+      return;
+    }
+    // Markera direkt i UI
+    setSentToIds((prev) => new Set(prev).add(userId));
   };
 
-  // Debounced search
+  // Debounced search (om/ när du kopplar på /api/friends/search)
   useEffect(() => {
     if (tab !== "friends") return;
     if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -347,41 +335,34 @@ export default function GroupClient({ initial }: { initial: GroupInitial }) {
         setResults([]);
         return;
       }
-      const resp = await friendsSearch(query);
-      if (!resp.ok) {
-        setError(resp.message ?? "Sökningen misslyckades.");
-        return;
-      }
-      setResults(resp.users);
+      // placeholder: vänta in din riktiga /api/friends/search – lämna tom för nu
+      setResults([]);
     }, 250);
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
   }, [q, tab]);
 
-  // UI
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-2">
         <button
-          className={classNames(
-            "rounded-xl px-3 py-1.5 text-sm",
-            tab === "group" ? "bg-neutral-800" : "bg-neutral-900 hover:bg-neutral-800"
-          )}
+          className={cx("rounded-xl px-3 py-1.5 text-sm", tab === "group" ? "bg-neutral-800" : "bg-neutral-900 hover:bg-neutral-800")}
           onClick={() => setTab("group")}
         >
           Group
         </button>
         <button
-          className={classNames(
-            "rounded-xl px-3 py-1.5 text-sm",
-            tab === "friends" ? "bg-neutral-800" : "bg-neutral-900 hover:bg-neutral-800"
-          )}
+          className={cx("rounded-xl px-3 py-1.5 text-sm", tab === "friends" ? "bg-neutral-800" : "bg-neutral-900 hover:bg-neutral-800")}
           onClick={() => setTab("friends")}
         >
           Friends
         </button>
       </div>
+
+      {error ? (
+        <div className="rounded-xl border border-red-800 bg-red-950/30 p-3 text-sm text-red-200">{error}</div>
+      ) : null}
 
       {tab === "group" ? (
         <GroupTab
@@ -389,7 +370,6 @@ export default function GroupClient({ initial }: { initial: GroupInitial }) {
           region={region}
           members={members}
           busy={busy}
-          error={error}
           onCopy={onCopy}
           onLeave={handleLeave}
           onJoin={handleJoin}
@@ -398,29 +378,22 @@ export default function GroupClient({ initial }: { initial: GroupInitial }) {
           meUserId={meUserId}
           setCode={setCode}
           refreshMembers={refreshMembers}
+          sentToIds={sentToIds}
+          pendingOutIds={new Set(pendingOut.map((r) => r.to.id))}
         />
       ) : (
-        <FriendsTab
-          friends={friends}
-          pendingIn={pendingIn}
-          pendingOut={pendingOut}
-          q={q}
-          setQ={setQ}
-          results={results}
-        />
+        <FriendsTab friends={friends} pendingIn={pendingIn} pendingOut={pendingOut} q={q} setQ={setQ} results={results} />
       )}
     </div>
   );
 }
 
-/** ---- Group-tab (render) ---- */
-
+/** ------- Group tab ------- */
 function GroupTab({
   code,
   region,
   members,
   busy,
-  error,
   onCopy,
   onLeave,
   onJoin,
@@ -429,12 +402,13 @@ function GroupTab({
   meUserId,
   setCode,
   refreshMembers,
+  sentToIds,
+  pendingOutIds,
 }: {
   code: string | null;
   region?: string;
   members: PublicMember[];
   busy: boolean;
-  error: string | null;
   onCopy: (code: string) => void;
   onLeave: () => void;
   onJoin: (code: string) => void;
@@ -443,16 +417,14 @@ function GroupTab({
   meUserId: string | null;
   setCode: (code: string | null) => void;
   refreshMembers: () => Promise<void>;
+  sentToIds: Set<string>;
+  pendingOutIds: Set<string>;
 }) {
   const [joinOpen, setJoinOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
 
   return (
     <div className="space-y-6">
-      {error ? (
-        <div className="rounded-xl border border-red-800 bg-red-950/30 p-3 text-sm text-red-200">{error}</div>
-      ) : null}
-
       {code ? (
         <div className="rounded-2xl border border-neutral-800 bg-neutral-950/60 p-4">
           <div className="mb-3 flex items-center justify-between">
@@ -489,43 +461,41 @@ function GroupTab({
                 <p className="text-sm text-neutral-400">Inga medlemmar ännu.</p>
               ) : (
                 <ul className="space-y-2">
-                  {members.map((m) => (
-                    <li
-                      key={m.userId}
-                      className="flex items-center justify-between rounded-xl border border-neutral-800 bg-neutral-950/40 px-3 py-2"
-                    >
-                      <div className="min-w-0">
-                        <div className="truncate font-medium">
-                          {m.displayName ?? m.username ?? "Okänd"}
+                  {members.map((m) => {
+                    const isMe = meUserId && m.userId === meUserId;
+                    const alreadySent = sentToIds.has(m.userId) || pendingOutIds.has(m.userId);
+                    return (
+                      <li key={m.userId} className="flex items-center justify-between rounded-xl border border-neutral-800 bg-neutral-950/40 px-3 py-2">
+                        <div className="min-w-0">
+                          <div className="truncate font-medium">{m.displayName ?? m.username ?? "Okänd"}</div>
+                          {Array.isArray(m.providers) && m.providers.length > 0 ? (
+                            <div className="mt-0.5 flex flex-wrap gap-1">
+                              {m.providers.map((p) => (
+                                <span key={p} className="rounded-md border border-neutral-700 px-1.5 py-0.5 text-[10px] uppercase opacity-90">
+                                  {p}
+                                </span>
+                              ))}
+                            </div>
+                          ) : null}
                         </div>
-                        {Array.isArray(m.providers) && m.providers.length > 0 ? (
-                          <div className="mt-0.5 flex flex-wrap gap-1">
-                            {m.providers.map((p) => (
-                              <span
-                                key={p}
-                                className="rounded-md border border-neutral-700 px-1.5 py-0.5 text-[10px] uppercase opacity-90"
-                              >
-                                {p}
-                              </span>
-                            ))}
-                          </div>
-                        ) : null}
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {meUserId && m.userId === meUserId ? (
-                          <span className="text-xs opacity-60">You</span>
-                        ) : (
-                          <button
-                            onClick={() => quickAdd(m.userId)}
-                            className="rounded-xl border border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-800"
-                            title="Add friend"
-                          >
-                            + Add
-                          </button>
-                        )}
-                      </div>
-                    </li>
-                  ))}
+                        <div className="flex items-center gap-2">
+                          {isMe ? (
+                            <span className="text-xs opacity-60">You</span>
+                          ) : alreadySent ? (
+                            <span className="text-xs opacity-70">Request sent</span>
+                          ) : (
+                            <button
+                              onClick={() => quickAdd(m.userId)}
+                              className="rounded-xl border border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-800"
+                              title="Add friend"
+                            >
+                              + Add
+                            </button>
+                          )}
+                        </div>
+                      </li>
+                    );
+                  })}
                 </ul>
               )}
             </div>
@@ -533,25 +503,13 @@ function GroupTab({
             <div>
               <h3 className="mb-2 text-lg font-semibold">Actions</h3>
               <div className="space-y-2">
-                <button
-                  className="w-full rounded-xl border border-neutral-700 px-3 py-2 text-sm hover:bg-neutral-800"
-                  onClick={refreshMembers}
-                  disabled={busy}
-                >
+                <button className="w-full rounded-xl border border-neutral-700 px-3 py-2 text-sm hover:bg-neutral-800" onClick={refreshMembers} disabled={busy}>
                   Refresh members
                 </button>
-                <button
-                  className="w-full rounded-xl border border-neutral-700 px-3 py-2 text-sm hover:bg-neutral-800"
-                  onClick={() => setJoinOpen((v) => !v)}
-                  disabled={busy}
-                >
+                <button className="w-full rounded-xl border border-neutral-700 px-3 py-2 text-sm hover:bg-neutral-800" onClick={() => setJoinOpen((v) => !v)} disabled={busy}>
                   Join group
                 </button>
-                <button
-                  className="w-full rounded-xl border border-neutral-700 px-3 py-2 text-sm hover:bg-neutral-800"
-                  onClick={() => setCreateOpen((v) => !v)}
-                  disabled={busy}
-                >
+                <button className="w-full rounded-xl border border-neutral-700 px-3 py-2 text-sm hover:bg-neutral-800" onClick={() => setCreateOpen((v) => !v)} disabled={busy}>
                   Create group
                 </button>
               </div>
@@ -574,8 +532,7 @@ function GroupTab({
   );
 }
 
-/** ---- Friends-tab (render) ---- */
-
+/** ------- Friends tab ------- */
 function FriendsTab({
   friends,
   pendingIn,
@@ -591,6 +548,7 @@ function FriendsTab({
   setQ: (q: string) => void;
   results: SearchUser[];
 }) {
+  // allt här map:ar enbart på arrays som redan defaultas till []
   return (
     <div className="space-y-6">
       <div>
@@ -660,8 +618,7 @@ function FriendsTab({
   );
 }
 
-/** ---- Små kort ---- */
-
+/** ------- small cards ------- */
 function JoinCard({ onJoin, busy }: { onJoin: (code: string) => void; busy: boolean }) {
   const [code, setCode] = useState("");
   return (
@@ -673,11 +630,7 @@ function JoinCard({ onJoin, busy }: { onJoin: (code: string) => void; busy: bool
         value={code}
         onChange={(e) => setCode(e.target.value)}
       />
-      <button
-        onClick={() => onJoin(code)}
-        disabled={busy}
-        className="rounded-xl bg-violet-600 px-4 py-2 text-white hover:bg-violet-500 disabled:opacity-60"
-      >
+      <button onClick={() => onJoin(code)} disabled={busy} className="rounded-xl bg-violet-600 px-4 py-2 text-white hover:bg-violet-500 disabled:opacity-60">
         Join
       </button>
     </div>
@@ -695,11 +648,7 @@ function CreateCard({ onCreate, busy }: { onCreate: (name?: string) => void; bus
         value={name}
         onChange={(e) => setName(e.target.value)}
       />
-      <button
-        onClick={() => onCreate(name.trim() || undefined)}
-        disabled={busy}
-        className="rounded-2xl bg-emerald-600 px-4 py-2 text-white hover:bg-emerald-500 disabled:opacity-60"
-      >
+      <button onClick={() => onCreate(name.trim() || undefined)} disabled={busy} className="rounded-2xl bg-emerald-600 px-4 py-2 text-white hover:bg-emerald-500 disabled:opacity-60">
         Create
       </button>
     </div>
