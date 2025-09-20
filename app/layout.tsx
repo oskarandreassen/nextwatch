@@ -2,13 +2,8 @@ import "./globals.css";
 import type { Metadata } from "next";
 import React from "react";
 import AppShell from "./components/layouts/AppShell";
-import dynamic from "next/dynamic";
+import OverlayMount from "./components/client/OverlayMount";
 import { cookies } from "next/headers";
-
-// Ladda client-komponenten endast på klienten
-const MatchOverlay = dynamic(() => import("./components/ui/MatchOverlay"), {
-  ssr: false,
-});
 
 export const metadata: Metadata = {
   title: "NextWatch",
@@ -20,7 +15,7 @@ export default async function RootLayout({
 }: {
   children: React.ReactNode;
 }) {
-  // App Router server-regel
+  // App Router-regeln: anropa cookies() på serversidan
   await cookies();
 
   return (
@@ -28,8 +23,8 @@ export default async function RootLayout({
       <body>
         <AppShell>{children}</AppShell>
 
-        {/* Global overlay: läser nw_group från cookie själv */}
-        <MatchOverlay />
+        {/* Global overlay – körs endast på klienten via OverlayMount */}
+        <OverlayMount />
       </body>
     </html>
   );
