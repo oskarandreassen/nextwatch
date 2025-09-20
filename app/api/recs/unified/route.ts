@@ -2,13 +2,6 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 
-/**
- * NextWatch – unified recs (V1)
- * Kandidater: trending/popular + recommendations från favoritfilm/-serie
- * Scoring: genres(+/-) + quality + lite recency
- * UI-kontrakt oförändrat.
- */
-
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -23,8 +16,8 @@ type TMDBPaged<T> = {
 
 type TMDBListItem = {
   id: number;
-  name?: string;      // tv
-  title?: string;     // movie
+  name?: string; // tv
+  title?: string; // movie
   genre_ids?: number[];
   poster_path?: string | null;
   vote_average?: number;
@@ -35,6 +28,20 @@ type TMDBListItem = {
 
 type TMDBGenreList = {
   genres: { id: number; name: string }[];
+};
+
+type TMDBKeywords = { id: number; keywords?: { id: number; name: string }[] };
+type TMDBKeywordsTV = { id: number; results?: { id: number; name: string }[] };
+
+type TMDBCredits = {
+  id: number;
+  cast?: { id: number; name: string; order?: number }[];
+  crew?: { id: number; name: string; job?: string; department?: string }[];
+};
+
+type TMDBDetailsWithAppends = TMDBListItem & {
+  keywords?: TMDBKeywords | TMDBKeywordsTV;
+  credits?: TMDBCredits;
 };
 
 type FavoriteItem = {
@@ -53,7 +60,7 @@ type ProfileDTO = {
   favoriteShow: FavoriteItem | null;
   favoriteGenres: string[];
   dislikedGenres: string[];
-  providers: string[]; // namn – mappar vi i V2/V3
+  providers: string[];
 };
 
 type UnifiedItem = {
@@ -71,7 +78,7 @@ type UnifiedOk = {
   group: { code: string; strictProviders: boolean } | null;
   language: string;
   region: string;
-  usedProviderIds: number[]; // lämnas tom i V1
+  usedProviderIds: number[];
   items: UnifiedItem[];
 };
 
@@ -82,14 +89,18 @@ function fail(message: string, status = 200) {
 }
 
 function getCookieString(all: Map<string, string>): string {
-  // serialisera cookies till request header
   const pairs: string[] = [];
   all.forEach((v, k) => pairs.push(`${k}=${encodeURIComponent(v)}`));
   return pairs.join("; ");
 }
 
-/** TMDB fetch helper med token eller api_key */
-async function tmdbGet<T>(path: string, params: Record<string, string | number | undefined>): Promise<T> {
+/* ---------------- TMDB helpers ---------------- */
+
+async function tmdbGet<T>(
+  path: string,
+  params: Record<string, string | number | undefined>,
+  cacheMode: RequestCache = "no-store",
+): Promise<T> {
   const v4 = process.env.TMDB_v4_TOKEN;
   const v3 = process.env.TMDB_API_KEY;
 
@@ -97,17 +108,14 @@ async function tmdbGet<T>(path: string, params: Record<string, string | number |
   for (const [k, v] of Object.entries(params)) {
     if (v !== undefined && v !== null) usp.set(k, String(v));
   }
-  // v3-key fallback om v4 saknas
   if (!v4 && v3) usp.set("api_key", v3);
 
   const url = `https://api.themoviedb.org/3${path}${usp.toString() ? `?${usp.toString()}` : ""}`;
   const res = await fetch(url, {
     headers: v4 ? { Authorization: `Bearer ${v4}` } : undefined,
-    cache: "no-store",
+    cache: cacheMode,
   });
-  if (!res.ok) {
-    throw new Error(`TMDB ${path} ${res.status}`);
-  }
+  if (!res.ok) throw new Error(`TMDB ${path} ${res.status}`);
   return (await res.json()) as T;
 }
 
@@ -122,11 +130,10 @@ function yearFrom(item: TMDBListItem): string | undefined {
   return /^\d{4}$/.test(y) ? y : undefined;
 }
 
-/** Enkel quality-score: betyg * log10(röster+1) */
 function qualityScore(voteAvg?: number, voteCount?: number): number {
   if (!voteAvg || !voteCount) return 0;
   const s = Math.log10(voteCount + 1);
-  return voteAvg * s; // 0..ca 80
+  return voteAvg * s;
 }
 
 function recencyBonus(year?: string): number {
@@ -153,7 +160,126 @@ function dedupe(items: { id: number; tmdbType: MediaType }[]): { id: number; tmd
   return out;
 }
 
-/** Poäng baserat på genrenamn-listor (från TMDB genre_ids + lokala genre-listor) */
+/* ---------------- Taste model (on-the-fly) ---------------- */
+
+type Taste = {
+  keywordW: Map<number, number>;
+  peopleW: Map<number, number>;
+};
+
+function increment(map: Map<number, number>, key: number, amount: number) {
+  map.set(key, (map.get(key) ?? 0) + amount);
+}
+
+function normalizeTopK(map: Map<number, number>, k: number): Map<number, number> {
+  const entries = Array.from(map.entries());
+  entries.sort((a, b) => b[1] - a[1]);
+  const top = entries.slice(0, k);
+  const max = top[0]?.[1] ?? 1;
+  const out = new Map<number, number>();
+  for (const [id, w] of top) out.set(id, w / max);
+  return out;
+}
+
+/** Tolkar TMDB keywords-appen för movie vs tv */
+function extractKeywordIds(d: TMDBDetailsWithAppends): number[] {
+  const kw = d.keywords;
+  if (!kw) return [];
+  // movie: {keywords:[{id,name}]}, tv: {results:[{id,name}]}
+  const arr =
+    "keywords" in kw && Array.isArray(kw.keywords)
+      ? kw.keywords
+      : "results" in kw && Array.isArray(kw.results)
+      ? kw.results
+      : [];
+  return arr.map((x) => x.id).filter((id) => Number.isFinite(id));
+}
+
+function extractPeopleIds(d: TMDBDetailsWithAppends, type: MediaType): number[] {
+  const c = d.credits;
+  if (!c) return [];
+  const ids: number[] = [];
+  // Cast: top-billed (order 0..4)
+  const cast = (c.cast ?? [])
+    .filter((m) => typeof m.id === "number")
+    .sort((a, b) => (a.order ?? 99) - (b.order ?? 99))
+    .slice(0, 5);
+  for (const m of cast) ids.push(m.id);
+
+  // Crew: regissör (movie) / creators (tv)
+  const crew = c.crew ?? [];
+  if (type === "movie") {
+    for (const m of crew) if (m.job === "Director" && typeof m.id === "number") ids.push(m.id);
+  } else {
+    // Tv: show creators listas ofta i crew med job "Creator" eller department "Writing"
+    for (const m of crew)
+      if ((m.job === "Creator" || m.department === "Writing") && typeof m.id === "number") ids.push(m.id);
+  }
+  return ids;
+}
+
+/** Hämtar features för (type,id) med append_to_response och fallback till en-US om keywords saknas */
+async function fetchFeatures(
+  type: MediaType,
+  id: number,
+  locale: string,
+): Promise<{ keywords: number[]; people: number[] }> {
+  const path = type === "movie" ? `/movie/${id}` : `/tv/${id}`;
+  // Först på locale, sen fallback på en-US
+  const primary = await tmdbGet<TMDBDetailsWithAppends>(
+    path,
+    { language: locale, append_to_response: "keywords,credits" },
+    "force-cache",
+  ).catch(() => null);
+
+  if (primary) {
+    const kw = extractKeywordIds(primary);
+    const ppl = extractPeopleIds(primary, type);
+    if (kw.length > 0 || ppl.length > 0) return { keywords: kw, people: ppl };
+  }
+
+  const fallback = await tmdbGet<TMDBDetailsWithAppends>(
+    path,
+    { language: "en-US", append_to_response: "keywords,credits" },
+    "force-cache",
+  );
+  return {
+    keywords: extractKeywordIds(fallback),
+    people: extractPeopleIds(fallback, type),
+  };
+}
+
+/** Bygger smakvektor från seeds (watchlist + favorites) */
+async function buildTaste(
+  seeds: { id: number; type: MediaType }[],
+  locale: string,
+): Promise<Taste> {
+  const keywordW = new Map<number, number>();
+  const peopleW = new Map<number, number>();
+
+  // Aggressiv viktning i början, planar ut med sqrt
+  const alphaKw = 1.0;
+  const alphaPpl = 1.0;
+
+  // Parallelisera men håll nere antalet totalt (seeds begränsas uppströms)
+  const feats = await Promise.all(
+    seeds.map((s) => fetchFeatures(s.type, s.id, locale).catch(() => ({ keywords: [], people: [] }))),
+  );
+
+  for (const f of feats) {
+    for (const kw of f.keywords) increment(keywordW, kw, alphaKw);
+    for (const p of f.people) increment(peopleW, p, alphaPpl);
+  }
+
+  // Top-K normaliserat (håller scoringen snabb)
+  return {
+    keywordW: normalizeTopK(keywordW, 60),
+    peopleW: normalizeTopK(peopleW, 60),
+  };
+}
+
+/* ---------------- Genre scoring (från V1) ---------------- */
+
 function genreScore(
   itemGenreIds: number[] | undefined,
   movieIdToName: Map<number, string>,
@@ -165,14 +291,15 @@ function genreScore(
   if (!itemGenreIds || itemGenreIds.length === 0) return 0;
   let score = 0;
   for (const id of itemGenreIds) {
-    const name =
-      type === "movie" ? movieIdToName.get(id) : tvIdToName.get(id);
+    const name = type === "movie" ? movieIdToName.get(id) : tvIdToName.get(id);
     if (!name) continue;
     if (liked.has(name)) score += 1.0;
-    if (disliked.has(name)) score -= 1.3; // negativa väger lite mer
+    if (disliked.has(name)) score -= 1.3;
   }
   return score;
 }
+
+/* ---------------- Route ---------------- */
 
 export async function GET(req: Request) {
   try {
@@ -184,113 +311,173 @@ export async function GET(req: Request) {
     const locale = cookieMap.get("nw_locale") || "sv-SE";
     const groupCode = cookieMap.get("nw_group") || null;
 
-    // Hämta profile via intern route för att slippa Prisma-hantering här.
+    // Hämta profil
     const cookieHeader = getCookieString(cookieMap);
     const profRes = await fetch(`${new URL(req.url).origin}/api/profile`, {
       headers: { cookie: cookieHeader },
       cache: "no-store",
     });
-    if (!profRes.ok) {
-      return fail("Kunde inte läsa profil.");
-    }
+    if (!profRes.ok) return fail("Kunde inte läsa profil.");
     const profJson = (await profRes.json()) as { ok: boolean; profile?: ProfileDTO };
-    if (!profJson.ok || !profJson.profile) {
-      return fail("Ingen profil.");
-    }
+    if (!profJson.ok || !profJson.profile) return fail("Ingen profil.");
     const profile = profJson.profile;
 
-    // Genre-listor (lokaliserade till locale) -> id->namn
+    // Genres (lokaliserade) för namn-lookup
     const [movieGenres, tvGenres] = await Promise.all([
-      tmdbGet<TMDBGenreList>("/genre/movie/list", { language: locale }),
-      tmdbGet<TMDBGenreList>("/genre/tv/list", { language: locale }),
+      tmdbGet<TMDBGenreList>("/genre/movie/list", { language: locale }, "force-cache"),
+      tmdbGet<TMDBGenreList>("/genre/tv/list", { language: locale }, "force-cache"),
     ]);
-    const movieIdToName = new Map<number, string>(movieGenres.genres.map(g => [g.id, g.name]));
-    const tvIdToName = new Map<number, string>(tvGenres.genres.map(g => [g.id, g.name]));
+    const movieIdToName = new Map<number, string>(movieGenres.genres.map((g) => [g.id, g.name]));
+    const tvIdToName = new Map<number, string>(tvGenres.genres.map((g) => [g.id, g.name]));
+    const likedGenres = new Set(profile.favoriteGenres ?? []);
+    const dislikedGenres = new Set(profile.dislikedGenres ?? []);
 
-    const liked = new Set(profile.favoriteGenres ?? []);
-    const disliked = new Set(profile.dislikedGenres ?? []);
-
-    // --- Kandidater ---
+    // Kandidater (V1)
     const page = new URL(req.url).searchParams.get("page");
     const pageNum = Math.max(1, Number(page || "1"));
 
-    const [
-      trMovie,
-      trTv,
-      popMovie,
-      popTv,
-    ] = await Promise.all([
-      tmdbGet<TMDBPaged<TMDBListItem>>("/trending/movie/day", { language: locale, region }),
-      tmdbGet<TMDBPaged<TMDBListItem>>("/trending/tv/day", { language: locale, region }),
-      tmdbGet<TMDBPaged<TMDBListItem>>("/movie/popular", { language: locale, region, page: pageNum }),
-      tmdbGet<TMDBPaged<TMDBListItem>>("/tv/popular", { language: locale, region, page: pageNum }),
+    const [trMovie, trTv, popMovie, popTv] = await Promise.all([
+      tmdbGet<TMDBPaged<TMDBListItem>>("/trending/movie/day", { language: locale, region }, "force-cache"),
+      tmdbGet<TMDBPaged<TMDBListItem>>("/trending/tv/day", { language: locale, region }, "force-cache"),
+      tmdbGet<TMDBPaged<TMDBListItem>>("/movie/popular", { language: locale, region, page: pageNum }, "force-cache"),
+      tmdbGet<TMDBPaged<TMDBListItem>>("/tv/popular", { language: locale, region, page: pageNum }, "force-cache"),
     ]);
 
-    const seeds: { id: number; type: MediaType }[] = [];
-    if (profile.favoriteMovie?.id) seeds.push({ id: profile.favoriteMovie.id, type: "movie" });
-    if (profile.favoriteShow?.id) seeds.push({ id: profile.favoriteShow.id, type: "tv" });
+    const baseRaw: { id: number; tmdbType: MediaType; item: TMDBListItem }[] = [];
+    for (const r of trMovie.results) baseRaw.push({ id: r.id, tmdbType: "movie", item: r });
+    for (const r of trTv.results) baseRaw.push({ id: r.id, tmdbType: "tv", item: r });
+    for (const r of popMovie.results) baseRaw.push({ id: r.id, tmdbType: "movie", item: r });
+    for (const r of popTv.results) baseRaw.push({ id: r.id, tmdbType: "tv", item: r });
 
+    // Seeds: favoriter + watchlist
+    const seedSet: { id: number; type: MediaType }[] = [];
+    if (profile.favoriteMovie?.id) seedSet.push({ id: profile.favoriteMovie.id, type: "movie" });
+    if (profile.favoriteShow?.id) seedSet.push({ id: profile.favoriteShow.id, type: "tv" });
+
+    // Watchlist (intern API) – försiktig tolkning av fält
+    const wlRes = await fetch(`${new URL(req.url).origin}/api/watchlist/list`, {
+      headers: { cookie: cookieHeader },
+      cache: "no-store",
+    }).catch(() => null);
+    if (wlRes?.ok) {
+      const wlJson = (await wlRes.json().catch(() => null)) as
+        | { ok: boolean; items?: unknown[] }
+        | null;
+      const items = (wlJson && (wlJson as { items?: unknown[] }).items) || [];
+      for (const anyItem of items) {
+        const obj = anyItem as Record<string, unknown>;
+        const id = Number(
+          (obj["tmdbId"] as number | undefined) ??
+            (obj["tmdb_id"] as number | undefined) ??
+            (obj["id"] as number | undefined),
+        );
+        const mt = (obj["mediaType"] as string | undefined) ?? (obj["media_type"] as string | undefined);
+        if (Number.isFinite(id) && (mt === "movie" || mt === "tv")) {
+          seedSet.push({ id, type: mt });
+        }
+      }
+    }
+
+    // Limitera seeds (prestanda) och dedupe
+    const seedSeen = new Set<string>();
+    const seeds: { id: number; type: MediaType }[] = [];
+    for (const s of seedSet) {
+      const k = `${s.type}_${s.id}`;
+      if (seedSeen.has(k)) continue;
+      seedSeen.add(k);
+      seeds.push(s);
+      if (seeds.length >= 25) break;
+    }
+
+    // Rekommendationer från seeds (TMDB)
     const recCalls = await Promise.all(
-      seeds.map(s =>
+      seeds.slice(0, 6).map((s) =>
         tmdbGet<TMDBPaged<TMDBListItem>>(
           s.type === "movie" ? `/movie/${s.id}/recommendations` : `/tv/${s.id}/recommendations`,
-          { language: locale, region }
-        ).catch(() => ({ page: 1, results: [] as TMDBListItem[] }))
-      )
+          { language: locale, region },
+          "force-cache",
+        ).catch(() => ({ page: 1, results: [] as TMDBListItem[] })),
+      ),
     );
-
-    // Kombinera & dedupe
-    const raw: { id: number; tmdbType: MediaType; source: string; item: TMDBListItem }[] = [];
-    for (const r of trMovie.results) raw.push({ id: r.id, tmdbType: "movie", source: "trending", item: r });
-    for (const r of trTv.results)    raw.push({ id: r.id, tmdbType: "tv",    source: "trending", item: r });
-    for (const r of popMovie.results) raw.push({ id: r.id, tmdbType: "movie", source: "popular", item: r });
-    for (const r of popTv.results)    raw.push({ id: r.id, tmdbType: "tv",    source: "popular", item: r });
-
     for (const rc of recCalls) {
       for (const r of rc.results) {
-        // Vi vet inte typ här – men vi vet det från seed; vi lägger in båda seed-kategorier separat ovan, så bra här:
-        // Vi avgör typ via titel/name heuristik: recommendations följer samma typ som seed i TMDB.
-        // För säkerhets skull stoppar vi in som "movie" om title finns, annars "tv".
         const typ: MediaType = r.title ? "movie" : "tv";
-        raw.push({ id: r.id, tmdbType: typ, source: "seed", item: r });
+        baseRaw.push({ id: r.id, tmdbType: typ, item: r });
       }
     }
 
-    // Dedupe by (type,id)
-    const uniq = dedupe(raw.map(r => ({ id: r.id, tmdbType: r.tmdbType })));
-    const mapKeyToItem = new Map<string, TMDBListItem>();
-    const mapKeyToType = new Map<string, MediaType>();
-    for (const r of raw) {
+    // Dedupe
+    const uniq = dedupe(baseRaw.map((r) => ({ id: r.id, tmdbType: r.tmdbType })));
+    const keyToItem = new Map<string, TMDBListItem>();
+    const keyToType = new Map<string, MediaType>();
+    for (const r of baseRaw) {
       const k = `${r.tmdbType}_${r.id}`;
-      if (!mapKeyToItem.has(k)) {
-        mapKeyToItem.set(k, r.item);
-        mapKeyToType.set(k, r.tmdbType);
+      if (!keyToItem.has(k)) {
+        keyToItem.set(k, r.item);
+        keyToType.set(k, r.tmdbType);
       }
     }
 
-    // Score
-    type Scored = { key: string; id: number; type: MediaType; score: number; base: TMDBListItem };
-    const scored: Scored[] = [];
-    for (const k of uniq.map(u => `${u.tmdbType}_${u.id}`)) {
-      const it = mapKeyToItem.get(k);
-      const type = mapKeyToType.get(k);
+    // V1-score
+    type Scored = { key: string; id: number; type: MediaType; scoreV1: number; base: TMDBListItem };
+    const scoredV1: Scored[] = [];
+    for (const k of uniq.map((u) => `${u.tmdbType}_${u.id}`)) {
+      const it = keyToItem.get(k);
+      const type = keyToType.get(k);
       if (!it || !type) continue;
-
-      const gScore = genreScore(it.genre_ids, movieIdToName, tvIdToName, type, liked, disliked);
+      const gScore = genreScore(it.genre_ids, movieIdToName, tvIdToName, type, likedGenres, dislikedGenres);
       const qScore = qualityScore(it.vote_average, it.vote_count);
       const rBonus = recencyBonus(yearFrom(it));
+      const v1 = 1.6 * gScore + 0.6 * qScore + 0.2 * rBonus;
+      scoredV1.push({ key: k, id: it.id, type, scoreV1: v1, base: it });
+    }
+    scoredV1.sort((a, b) => b.scoreV1 - a.scoreV1);
 
-      // viktning V1 – enkel och förklarbar
-      const final = 1.6 * gScore + 0.6 * qScore + 0.2 * rBonus;
+    // Bygg smakvektor (keywords + people) från seeds
+    const taste = await buildTaste(seeds, locale);
 
-      scored.push({ key: k, id: it.id, type, score: final, base: it });
+    // Hämta features för top N kandidater och re-ranka (V2-score)
+    const N = Math.min(60, scoredV1.length);
+    const topKeys = scoredV1.slice(0, N).map((s) => ({ key: s.key, id: s.id, type: s.type }));
+
+    // mini-cache för feature-anrop inom detta request
+    const featureCache = new Map<string, { keywords: number[]; people: number[] }>();
+    const fetchBatch = topKeys.map(async (t) => {
+      const k = `${t.type}:${t.id}:${locale}`;
+      if (featureCache.has(k)) return;
+      const f = await fetchFeatures(t.type, t.id, locale).catch(() => ({ keywords: [], people: [] }));
+      featureCache.set(k, f);
+    });
+    await Promise.all(fetchBatch);
+
+    function scoreTaste(f: { keywords: number[]; people: number[] }): number {
+      let s = 0;
+      for (const kw of f.keywords) {
+        const w = taste.keywordW.get(kw);
+        if (w) s += 1.2 * w;
+      }
+      for (const p of f.people) {
+        const w = taste.peopleW.get(p);
+        if (w) s += 1.4 * w;
+      }
+      return s;
     }
 
-    // sortera & skär av
-    scored.sort((a, b) => b.score - a.score);
-    const top = scored.slice(0, 100);
+    type ScoredFinal = { id: number; type: MediaType; final: number; base: TMDBListItem };
+    const finalList: ScoredFinal[] = [];
 
-    const items: UnifiedItem[] = top.map(s => ({
+    for (const s of scoredV1) {
+      let v2 = s.scoreV1;
+      const f = featureCache.get(`${s.type}:${s.id}:${locale}`);
+      if (f) {
+        v2 += scoreTaste(f);
+      }
+      finalList.push({ id: s.id, type: s.type, final: v2, base: s.base });
+    }
+
+    finalList.sort((a, b) => b.final - a.final);
+
+    const items: UnifiedItem[] = finalList.slice(0, 100).map((s) => ({
       id: s.id,
       tmdbType: s.type,
       title: pickTitle(s.base),
@@ -305,13 +492,13 @@ export async function GET(req: Request) {
       group: groupCode ? { code: groupCode, strictProviders: false } : null,
       language: locale,
       region,
-      usedProviderIds: [], // V1: ej mappat
+      usedProviderIds: [],
       items,
     };
 
     return NextResponse.json(payload);
   } catch (err) {
-    console.error("unified recs error:", err);
+    console.error("unified recs V2 error:", err);
     return fail("Internt fel vid rekommendation.");
   }
 }
