@@ -8,6 +8,19 @@ import type { GroupInitial as BaseGroupInitial, PublicMember as BasePublicMember
 function classNames(...xs: string[]): string {
   return xs.filter(Boolean).join(" ");
 }
+/** Läs cookie-värde på klientsidan */
+function getCookie(name: string): string | null {
+  if (typeof document === "undefined") return null;
+  const m = document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`));
+  return m ? decodeURIComponent(m[1]) : null;
+}
+/** Type guards */
+function isObj(x: unknown): x is Record<string, unknown> {
+  return typeof x === "object" && x !== null;
+}
+function hasKey<T extends string>(o: unknown, key: T): o is Record<T, unknown> {
+  return isObj(o) && key in o;
+}
 
 /** Utöka server-typer lokalt (utan att kräva serverändringar) */
 type PublicMember = BasePublicMember & {
@@ -55,8 +68,6 @@ type FriendsListResp = {
   pendingOut: { requestId: string; to: FriendsListUser }[];
 };
 
-type RequestResp = { status: "PENDING_OUT" | "ACCEPTED" };
-
 /** ---- API-kall (toleranta mot olika svar) ---- */
 
 async function getMembers(code: string | null): Promise<
@@ -75,50 +86,20 @@ async function getMembers(code: string | null): Promise<
     return { ok: false, message };
   }
 
-  // Kan vara { ok, code, members } eller { ok, group:{code,region}, members }
-  const raw = (await res.json()) as Api<MembersRespNew | MembersRespLegacy>;
-  if (!raw.ok) return raw;
-
-  // Normalisera
-  if ("code" in raw) {
-    return { ok: true, code: raw.code, members: (raw.members ?? []) as PublicMember[] };
-  }
-  // legacy
-  return {
-    ok: true,
-    code: raw.group.code,
-    region: raw.group.region,
-    members: (raw.members ?? []) as PublicMember[],
-  };
-}
-
-async function createGroup(
-  name?: string
-): Promise<Api<{ code: string }>> {
-  const res = await fetch("/api/group/create", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(name ? { name } : {}),
-  });
-  if (!res.ok) {
-    let message = "Kunde inte skapa grupp.";
-    try {
-      const body = (await res.json()) as { message?: string };
-      if (body?.message) message = body.message;
-    } catch {
-      /* ignore */
+  try {
+    const data = (await res.json()) as unknown;
+    if (hasKey(data, "code") && typeof (data as { code?: unknown }).code === "string") {
+      const d = data as MembersRespNew;
+      return { ok: true, code: d.code, members: d.members };
     }
-    return { ok: false, message };
+    if (hasKey(data, "group") && isObj((data as MembersRespLegacy).group)) {
+      const d = data as MembersRespLegacy;
+      return { ok: true, code: d.group.code, region: d.group.region, members: d.members };
+    }
+  } catch {
+    return { ok: false, message: "Felaktigt svar från servern." };
   }
-  const data = (await res.json()) as unknown;
-  // Stöd både { ok, code } och { ok, group:{code} }
-  if (typeof data === "object" && data && "ok" in data) {
-    const d = data as { ok: boolean; code?: string; group?: { code?: string } };
-    if (!d.ok) return { ok: false, message: "Ett fel uppstod." };
-    const code = d.code ?? d.group?.code ?? "";
-    return { ok: true, code };
-  }
-  return { ok: false, message: "Oväntat svar från servern." };
+  return { ok: false, message: "Okänt svar." };
 }
 
 async function joinGroup(code: string): Promise<Api<{ code: string }>> {
@@ -137,19 +118,26 @@ async function joinGroup(code: string): Promise<Api<{ code: string }>> {
     }
     return { ok: false, message };
   }
-  const data = (await res.json()) as unknown;
-  const d = data as { ok: boolean; code?: string; group?: { code?: string } };
-  if (!d.ok) return { ok: false, message: "Ett fel uppstod." };
-  const normalized = d.code ?? d.group?.code ?? "";
-  return { ok: true, code: normalized };
+  try {
+    const data = (await res.json()) as unknown;
+    if (hasKey(data, "code") && typeof (data as { code?: unknown }).code === "string") {
+      return { ok: true, code: (data as { code: string }).code };
+    }
+    if (hasKey(data, "group") && isObj((data as { group?: unknown }).group)) {
+      const g = (data as { group: { code?: string } }).group;
+      return { ok: true, code: g.code ?? "" };
+    }
+    if (hasKey(data, "ok") && (data as { ok: unknown }).ok === false) {
+      return { ok: false, message: "Ett fel uppstod." };
+    }
+  } catch {
+    /* ignore */
+  }
+  return { ok: false, message: "Oväntat svar från servern." };
 }
 
-async function leaveGroup(code: string): Promise<ApiOk | ApiErr> {
-  const res = await fetch("/api/group/leave", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ code }),
-  });
+async function leaveGroup(): Promise<Api<{ success: true }>> {
+  const res = await fetch("/api/group/leave", { method: "POST" });
   if (!res.ok) {
     let message = "Kunde inte lämna gruppen.";
     try {
@@ -160,14 +148,17 @@ async function leaveGroup(code: string): Promise<ApiOk | ApiErr> {
     }
     return { ok: false, message };
   }
-  return (await res.json()) as ApiOk | ApiErr;
+  return { ok: true, success: true };
 }
 
-async function friendsSearch(q: string): Promise<Api<{ users: SearchUser[] }>> {
-  const url = `/api/friends/search?q=${encodeURIComponent(q)}`;
-  const res = await fetch(url, { cache: "no-store" });
+async function createGroup(name?: string): Promise<Api<{ code: string }>> {
+  const res = await fetch("/api/group/create", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(name ? { name } : {}),
+  });
   if (!res.ok) {
-    let message = "Sökning misslyckades.";
+    let message = "Kunde inte skapa grupp.";
     try {
       const body = (await res.json()) as { message?: string };
       if (body?.message) message = body.message;
@@ -176,88 +167,63 @@ async function friendsSearch(q: string): Promise<Api<{ users: SearchUser[] }>> {
     }
     return { ok: false, message };
   }
-  // Server returnerar { ok, results: [...] } med fält: id, username, display_name, is_friend
-  const data = (await res.json()) as
-    | { ok: true; results: Array<{ id: string; username: string | null; display_name: string | null; is_friend: boolean }> }
-    | ApiErr;
-
-  if ("ok" in data && data.ok) {
-    const users: SearchUser[] = data.results.map((r) => ({
-      id: r.id,
-      username: r.username,
-      displayName: r.display_name,
-      status: r.is_friend ? "ACCEPTED" : "NONE",
-    }));
-    return { ok: true, users };
+  try {
+    const data = (await res.json()) as unknown;
+    if (hasKey(data, "code") && typeof (data as { code?: unknown }).code === "string") {
+      return { ok: true, code: (data as { code: string }).code };
+    }
+    if (hasKey(data, "group") && isObj((data as { group?: unknown }).group)) {
+      const g = (data as { group: { code?: string } }).group;
+      return { ok: true, code: g.code ?? "" };
+    }
+    if (hasKey(data, "ok") && (data as { ok: unknown }).ok === false) {
+      return { ok: false, message: "Ett fel uppstod." };
+    }
+  } catch {
+    /* ignore */
   }
-  return data as ApiErr;
+  return { ok: false, message: "Oväntat svar från servern." };
 }
 
 async function friendsList(): Promise<Api<FriendsListResp>> {
   const res = await fetch("/api/friends/list", { cache: "no-store" });
-  if (!res.ok) {
-    let message = "Kunde inte hämta kompisar.";
-    try {
-      const body = (await res.json()) as { message?: string };
-      if (body?.message) message = body.message;
-    } catch {
-      /* ignore */
-    }
-    return { ok: false, message };
+  if (!res.ok) return { ok: false, message: "Kunde inte hämta vänner." };
+  try {
+    return (await res.json()) as Api<FriendsListResp>;
+  } catch {
+    return { ok: false, message: "Felaktigt svar från servern." };
   }
-  // Server returnerar { ok, friends: [...] }
-  const base = (await res.json()) as { ok: true; friends: FriendsListUser[] } | ApiErr;
-  if ("ok" in base && base.ok) {
-    return {
-      ok: true,
-      friends: base.friends,
-      pendingIn: [],
-      pendingOut: [],
-    };
-  }
-  return base as ApiErr;
 }
 
-async function friendRequestById(userId: string): Promise<Api<RequestResp>> {
-  // Server-API tar emot toUserId (inte userId)
+async function friendRequestById(userId: string): Promise<Api<{ requestId: string }>> {
   const res = await fetch("/api/friends/request", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ toUserId: userId }),
   });
   if (!res.ok) {
-    let message = "Kunde inte skicka förfrågan.";
     try {
-      const body = (await res.json()) as { message?: string };
-      if (body?.message) message = body.message;
+      const b = (await res.json()) as { message?: string };
+      return { ok: false, message: b?.message ?? "Kunde inte skicka vänförfrågan." };
     } catch {
-      /* ignore */
+      return { ok: false, message: "Kunde inte skicka vänförfrågan." };
     }
-    return { ok: false, message };
   }
-  // Servern svarar { ok, requestId } – mappa till status = 'PENDING_OUT'
-  const data = (await res.json()) as { ok: true; requestId: string } | ApiErr;
-  if ("ok" in data && data.ok) return { ok: true, status: "PENDING_OUT" };
-  return data as ApiErr;
+  try {
+    return (await res.json()) as Api<{ requestId: string }>;
+  } catch {
+    return { ok: false, message: "Felaktigt svar från servern." };
+  }
 }
 
-async function acceptFriend(requestId: string): Promise<ApiOk | ApiErr> {
-  const res = await fetch("/api/friends/accept", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ requestId }),
-  });
-  if (!res.ok) {
-    let message = "Kunde inte acceptera.";
-    try {
-      const body = (await res.json()) as { message?: string };
-      if (body?.message) message = body.message;
-    } catch {
-      /* ignore */
-    }
-    return { ok: false, message };
+async function friendsSearch(q: string): Promise<Api<{ users: SearchUser[] }>> {
+  const res = await fetch(`/api/friends/search?q=${encodeURIComponent(q)}`, { cache: "no-store" });
+  if (!res.ok) return { ok: false, message: "Sökningen misslyckades." };
+  try {
+    return (await res.json()) as Api<{ users: SearchUser[] }>;
+  } catch {
+    return { ok: false, message: "Felaktigt svar från servern." };
   }
-  return (await res.json()) as ApiOk | ApiErr;
 }
 
 /** ---- Komponent ---- */
@@ -279,25 +245,32 @@ export default function GroupClient({ initial }: { initial: GroupInitial }) {
   const [pendingIn, setPendingIn] = useState<{ requestId: string; from: FriendsListUser }[]>([]);
   const [pendingOut, setPendingOut] = useState<{ requestId: string; to: FriendsListUser }[]>([]);
 
+  // Mitt userId (för att dölja +Add på mig själv)
+  const [meUserId, setMeUserId] = useState<string | null>(null);
+
   // Search state
   const [q, setQ] = useState<string>("");
   const [results, setResults] = useState<SearchUser[]>([]);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const active = Boolean(code);
+  // Läs in nw_uid från cookies en gång
+  useEffect(() => {
+    const uid = getCookie("nw_uid");
+    if (uid) setMeUserId(uid);
+  }, []);
 
   // Ladda friends-listan när man går in på fliken
   useEffect(() => {
     if (tab !== "friends") return;
     (async () => {
       const resp = await friendsList();
-      if (resp.ok) {
-        setFriends(resp.friends);
-        setPendingIn(resp.pendingIn);
-        setPendingOut(resp.pendingOut);
-      } else {
-        setError(resp.message ?? "Ett fel uppstod.");
+      if (!resp.ok) {
+        setError(resp.message ?? "Kunde inte hämta vänner.");
+        return;
       }
+      setFriends(resp.friends);
+      setPendingIn(resp.pendingIn);
+      setPendingOut(resp.pendingOut);
     })();
   }, [tab]);
 
@@ -317,51 +290,43 @@ export default function GroupClient({ initial }: { initial: GroupInitial }) {
     setError(null);
     const resp = await createGroup(name);
     setBusy(false);
-    if (resp.ok) {
-      setCode(resp.code);
-      await refreshMembers();
-    } else {
-      setError(resp.message ?? "Ett fel uppstod.");
-    }
-  };
-
-  const handleJoin = async (raw: string) => {
-    const joinCode = raw.trim().toUpperCase();
-    if (joinCode.length < 4) {
-      setError("Ogiltig kod.");
+    if (!resp.ok) {
+      setError(resp.message ?? "Kunde inte skapa gruppen.");
       return;
     }
-    setBusy(true);
-    setError(null);
-    const resp = await joinGroup(joinCode);
-    setBusy(false);
-    if (resp.ok) {
-      setCode(resp.code);
-      await refreshMembers();
-    } else {
-      setError(resp.message ?? "Ett fel uppstod.");
-    }
+    setCode(resp.code);
+    await refreshMembers();
   };
 
   const handleLeave = async () => {
-    if (!code) return;
     setBusy(true);
     setError(null);
-    const resp = await leaveGroup(code);
+    const resp = await leaveGroup();
     setBusy(false);
-    if (resp.ok) {
-      setCode(null);
-      setMembers([]);
-      setRegion(undefined);
-    } else {
-      setError(resp.message ?? "Ett fel uppstod.");
+    if (!resp.ok) {
+      setError(resp.message ?? "Kunde inte lämna gruppen.");
+      return;
     }
+    setCode(null);
+    setMembers([]);
   };
 
-  const copyCode = async () => {
-    if (!code) return;
+  const handleJoin = async (groupCode: string) => {
+    setBusy(true);
+    setError(null);
+    const resp = await joinGroup(groupCode);
+    setBusy(false);
+    if (!resp.ok) {
+      setError(resp.message ?? "Kunde inte gå med i gruppen.");
+      return;
+    }
+    setCode(resp.code);
+    await refreshMembers();
+  };
+
+  const onCopy = async (codeToCopy: string) => {
     try {
-      await navigator.clipboard.writeText(code);
+      await navigator.clipboard.writeText(codeToCopy);
     } catch {
       // ignore
     }
@@ -369,39 +334,39 @@ export default function GroupClient({ initial }: { initial: GroupInitial }) {
 
   const quickAdd = async (userId: string) => {
     const resp = await friendRequestById(userId);
-    if (!resp.ok) {
-      setError(resp.message ?? "Kunde inte lägga till vän.");
-    }
+    if (!resp.ok) setError(resp.message ?? "Kunde inte lägga till vän.");
   };
 
   // Debounced search
   useEffect(() => {
     if (tab !== "friends") return;
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    if (q.trim().length < 2) {
-      setResults([]);
-      return;
-    }
     debounceRef.current = setTimeout(async () => {
-      const resp = await friendsSearch(q.trim());
-      if (resp.ok) setResults(resp.users);
-      else setError(resp.message ?? "Ett fel uppstod.");
-    }, 220);
+      const query = q.trim();
+      if (!query) {
+        setResults([]);
+        return;
+      }
+      const resp = await friendsSearch(query);
+      if (!resp.ok) {
+        setError(resp.message ?? "Sökningen misslyckades.");
+        return;
+      }
+      setResults(resp.users);
+    }, 250);
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
   }, [q, tab]);
 
+  // UI
   return (
-    <>
-      <h1 className="mb-6 text-2xl font-bold">Group</h1>
-
-      {/* Tabs */}
-      <div className="mb-6 flex gap-2">
+    <div className="space-y-6">
+      <div className="flex items-center gap-2">
         <button
           className={classNames(
-            "rounded-xl px-4 py-2",
-            tab === "group" ? "bg-violet-600 text-white" : "bg-neutral-800 text-neutral-200 hover:bg-neutral-700"
+            "rounded-xl px-3 py-1.5 text-sm",
+            tab === "group" ? "bg-neutral-800" : "bg-neutral-900 hover:bg-neutral-800"
           )}
           onClick={() => setTab("group")}
         >
@@ -409,8 +374,8 @@ export default function GroupClient({ initial }: { initial: GroupInitial }) {
         </button>
         <button
           className={classNames(
-            "rounded-xl px-4 py-2",
-            tab === "friends" ? "bg-violet-600 text-white" : "bg-neutral-800 text-neutral-200 hover:bg-neutral-700"
+            "rounded-xl px-3 py-1.5 text-sm",
+            tab === "friends" ? "bg-neutral-800" : "bg-neutral-900 hover:bg-neutral-800"
           )}
           onClick={() => setTab("friends")}
         >
@@ -418,75 +383,138 @@ export default function GroupClient({ initial }: { initial: GroupInitial }) {
         </button>
       </div>
 
-      {/* Error */}
-      {error && (
-        <div className="mb-4 rounded-lg bg-red-500/10 px-3 py-2 text-sm text-red-400">
-          {error}
-        </div>
-      )}
-
       {tab === "group" ? (
-        <section className="space-y-6">
-          {/* Active group card */}
-          {active ? (
-            <div className="rounded-2xl bg-neutral-900 p-5">
-              <div className="mb-3 flex items-center justify-between">
-                <div>
-                  <div className="text-sm text-neutral-400">Active group</div>
-                  <div className="text-xl font-semibold">
-                    Code: <span className="font-mono tracking-widest">{code}</span>
-                  </div>
-                  <div className="text-xs text-neutral-500">Region: {region ?? "—"}</div>
-                </div>
-                <div className="flex gap-2">
-                  <button
-                    onClick={copyCode}
-                    className="rounded-xl border border-neutral-700 px-3 py-2 hover:bg-neutral-800"
-                  >
-                    Copy code
-                  </button>
-                  <button
-                    onClick={refreshMembers}
-                    className="rounded-xl border border-neutral-700 px-3 py-2 hover:bg-neutral-800"
-                  >
-                    Refresh
-                  </button>
-                  <button
-                    onClick={handleLeave}
-                    disabled={busy}
-                    className="rounded-xl bg-rose-600 px-3 py-2 text-white hover:bg-rose-500 disabled:opacity-60"
-                  >
-                    Leave
-                  </button>
-                </div>
-              </div>
+        <GroupTab
+          code={code}
+          region={region}
+          members={members}
+          busy={busy}
+          error={error}
+          onCopy={onCopy}
+          onLeave={handleLeave}
+          onJoin={handleJoin}
+          onCreate={handleCreate}
+          quickAdd={quickAdd}
+          meUserId={meUserId}
+          setCode={setCode}
+          refreshMembers={refreshMembers}
+        />
+      ) : (
+        <FriendsTab
+          friends={friends}
+          pendingIn={pendingIn}
+          pendingOut={pendingOut}
+          q={q}
+          setQ={setQ}
+          results={results}
+        />
+      )}
+    </div>
+  );
+}
 
-              <div>
-                <h3 className="mb-2 text-lg font-semibold">Members</h3>
-                {members.length === 0 ? (
-                  <p className="text-sm text-neutral-400">Inga medlemmar ännu.</p>
-                ) : (
-                  <ul className="space-y-2">
-                    {members.map((m) => (
-                      <li
-                        key={m.userId}
-                        className="flex items-center justify-between rounded-xl border border-neutral-800 bg-neutral-950/40 px-3 py-2"
-                      >
-                        <div className="min-w-0">
-                          <div className="truncate font-medium">
-                            {m.displayName ?? m.username ?? "Okänd"}
-                          </div>
-                          {m.providers?.length ? (
-                            <div className="mt-1 flex flex-wrap gap-1 text-xs text-neutral-400">
-                              {m.providers.map((p: string) => (
-                                <span key={`${m.userId}-${p}`} className="rounded bg-neutral-800 px-2 py-0.5">
-                                  {p}
-                                </span>
-                              ))}
-                            </div>
-                          ) : null}
+/** ---- Group-tab (render) ---- */
+
+function GroupTab({
+  code,
+  region,
+  members,
+  busy,
+  error,
+  onCopy,
+  onLeave,
+  onJoin,
+  onCreate,
+  quickAdd,
+  meUserId,
+  setCode,
+  refreshMembers,
+}: {
+  code: string | null;
+  region?: string;
+  members: PublicMember[];
+  busy: boolean;
+  error: string | null;
+  onCopy: (code: string) => void;
+  onLeave: () => void;
+  onJoin: (code: string) => void;
+  onCreate: (name?: string) => void;
+  quickAdd: (userId: string) => void;
+  meUserId: string | null;
+  setCode: (code: string | null) => void;
+  refreshMembers: () => Promise<void>;
+}) {
+  const [joinOpen, setJoinOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
+
+  return (
+    <div className="space-y-6">
+      {error ? (
+        <div className="rounded-xl border border-red-800 bg-red-950/30 p-3 text-sm text-red-200">{error}</div>
+      ) : null}
+
+      {code ? (
+        <div className="rounded-2xl border border-neutral-800 bg-neutral-950/60 p-4">
+          <div className="mb-3 flex items-center justify-between">
+            <div>
+              <div className="text-sm opacity-70">Active group</div>
+              <div className="text-xl font-semibold">{code}</div>
+              <div className="text-xs opacity-60">{region ?? "—"}</div>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                className="rounded-xl border border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-800"
+                onClick={() => onCopy(code)}
+                title="Copy group code"
+              >
+                Copy code
+              </button>
+              <button
+                className="rounded-xl border border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-800"
+                onClick={() => {
+                  onLeave();
+                  setCode(null);
+                }}
+                title="Leave group"
+              >
+                Leave
+              </button>
+            </div>
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <div>
+              <h3 className="mb-2 text-lg font-semibold">Members</h3>
+              {members.length === 0 ? (
+                <p className="text-sm text-neutral-400">Inga medlemmar ännu.</p>
+              ) : (
+                <ul className="space-y-2">
+                  {members.map((m) => (
+                    <li
+                      key={m.userId}
+                      className="flex items-center justify-between rounded-xl border border-neutral-800 bg-neutral-950/40 px-3 py-2"
+                    >
+                      <div className="min-w-0">
+                        <div className="truncate font-medium">
+                          {m.displayName ?? m.username ?? "Okänd"}
                         </div>
-                        <div className="flex items-center gap-2">
+                        {Array.isArray(m.providers) && m.providers.length > 0 ? (
+                          <div className="mt-0.5 flex flex-wrap gap-1">
+                            {m.providers.map((p) => (
+                              <span
+                                key={p}
+                                className="rounded-md border border-neutral-700 px-1.5 py-0.5 text-[10px] uppercase opacity-90"
+                              >
+                                {p}
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {meUserId && m.userId === meUserId ? (
+                          <span className="text-xs opacity-60">You</span>
+                        ) : (
                           <button
                             onClick={() => quickAdd(m.userId)}
                             className="rounded-xl border border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-800"
@@ -494,165 +522,153 @@ export default function GroupClient({ initial }: { initial: GroupInitial }) {
                           >
                             + Add
                           </button>
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-            </div>
-          ) : (
-            // No active group: Join or Create
-            <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
-              <JoinCard onJoin={handleJoin} busy={busy} />
-              <CreateCard onCreate={handleCreate} busy={busy} />
-            </div>
-          )}
-        </section>
-      ) : (
-        // Friends tab
-        <section className="space-y-6">
-          <div className="rounded-2xl bg-neutral-900 p-5">
-            <h3 className="mb-3 text-lg font-semibold">Find friends</h3>
-            <input
-              className="w-full rounded-xl border border-neutral-700 bg-neutral-800 px-3 py-2 text-neutral-100 outline-none focus:ring-2 focus:ring-violet-600"
-              placeholder="Search by username or display name…"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-            />
-            {results.length > 0 && (
-              <ul className="mt-3 space-y-2">
-                {results.map((u) => (
-                  <li
-                    key={u.id}
-                    className="flex items-center justify-between rounded-xl border border-neutral-800 bg-neutral-950/40 px-3 py-2"
-                  >
-                    <div className="min-w-0">
-                      <div className="truncate font-medium">{u.displayName ?? u.username ?? "Okänd"}</div>
-                      <div className="text-xs text-neutral-500">
-                        {u.username ? `@${u.username}` : "—"}
+                        )}
                       </div>
-                    </div>
-                    <div>
-                      {u.status === "ACCEPTED" ? (
-                        <span className="text-xs text-emerald-400">Friends</span>
-                      ) : u.status === "PENDING_OUT" ? (
-                        <span className="text-xs text-neutral-400">Requested</span>
-                      ) : u.status === "PENDING_IN" ? (
-                        <span className="text-xs text-amber-400">Requested you</span>
-                      ) : (
-                        <button
-                          onClick={async () => {
-                            const resp = await friendRequestById(u.id);
-                            if (!resp.ok) setError(resp.message ?? "Kunde inte skicka förfrågan.");
-                          }}
-                          className="rounded-xl border border-neutral-700 px-3 py-1.5 text-sm hover:bg-neutral-800"
-                        >
-                          Add
-                        </button>
-                      )}
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
 
-          <div className="rounded-2xl bg-neutral-900 p-5">
-            <h3 className="mb-3 text-lg font-semibold">Requests</h3>
-            {pendingIn.length === 0 && pendingOut.length === 0 ? (
-              <p className="text-sm text-neutral-400">Inga förfrågningar.</p>
-            ) : (
-              <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
-                <div>
-                  <h4 className="mb-2 font-medium">Incoming</h4>
-                  <ul className="space-y-2">
-                    {pendingIn.map((r) => (
-                      <li
-                        key={r.requestId}
-                        className="flex items-center justify-between rounded-xl border border-neutral-800 bg-neutral-950/40 px-3 py-2"
-                      >
-                        <div className="truncate">
-                          {r.from.displayName ?? r.from.username ?? "Okänd"}
-                        </div>
-                        <button
-                          onClick={async () => {
-                            const resp = await acceptFriend(r.requestId);
-                            if (!resp.ok) {
-                              setError(resp.message ?? "Kunde inte acceptera.");
-                              return;
-                            }
-                            // Refresh list
-                            const fl = await friendsList();
-                            if (fl.ok) {
-                              setFriends(fl.friends);
-                              setPendingIn(fl.pendingIn);
-                              setPendingOut(fl.pendingOut);
-                            }
-                          }}
-                          className="rounded-xl bg-emerald-600 px-3 py-1.5 text-sm text-white hover:bg-emerald-500"
-                        >
-                          Accept
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-                <div>
-                  <h4 className="mb-2 font-medium">Outgoing</h4>
-                  <ul className="space-y-2">
-                    {pendingOut.map((r) => (
-                      <li
-                        key={r.requestId}
-                        className="flex items-center justify-between rounded-xl border border-neutral-800 bg-neutral-950/40 px-3 py-2"
-                      >
-                        <div className="truncate">
-                          {r.to.displayName ?? r.to.username ?? "Okänd"}
-                        </div>
-                        <span className="text-xs text-neutral-400">Pending…</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
+            <div>
+              <h3 className="mb-2 text-lg font-semibold">Actions</h3>
+              <div className="space-y-2">
+                <button
+                  className="w-full rounded-xl border border-neutral-700 px-3 py-2 text-sm hover:bg-neutral-800"
+                  onClick={refreshMembers}
+                  disabled={busy}
+                >
+                  Refresh members
+                </button>
+                <button
+                  className="w-full rounded-xl border border-neutral-700 px-3 py-2 text-sm hover:bg-neutral-800"
+                  onClick={() => setJoinOpen((v) => !v)}
+                  disabled={busy}
+                >
+                  Join group
+                </button>
+                <button
+                  className="w-full rounded-xl border border-neutral-700 px-3 py-2 text-sm hover:bg-neutral-800"
+                  onClick={() => setCreateOpen((v) => !v)}
+                  disabled={busy}
+                >
+                  Create group
+                </button>
               </div>
-            )}
+            </div>
           </div>
 
-          <div className="rounded-2xl bg-neutral-900 p-5">
-            <h3 className="mb-3 text-lg font-semibold">Friends</h3>
-            {friends.length === 0 ? (
-              <p className="text-sm text-neutral-400">Du har inga vänner ännu.</p>
-            ) : (
-              <ul className="space-y-2">
-                {friends.map((f) => (
-                  <li
-                    key={f.id}
-                    className="flex items-center justify-between rounded-xl border border-neutral-800 bg-neutral-950/40 px-3 py-2"
-                  >
-                    <div className="truncate">
-                      {f.displayName ?? f.username ?? "Okänd"}
-                    </div>
-                    <span className="text-xs text-emerald-400">Friend</span>
-                  </li>
-                ))}
-              </ul>
-            )}
+          {joinOpen ? <JoinCard onJoin={onJoin} busy={busy} /> : null}
+          {createOpen ? <CreateCard onCreate={onCreate} busy={busy} /> : null}
+        </div>
+      ) : (
+        <div className="rounded-2xl border border-neutral-800 bg-neutral-950/60 p-4">
+          <div className="mb-4 text-sm opacity-70">You are not in a group.</div>
+          <div className="grid gap-4 md:grid-cols-2">
+            <JoinCard onJoin={onJoin} busy={busy} />
+            <CreateCard onCreate={onCreate} busy={busy} />
           </div>
-        </section>
+        </div>
       )}
-    </>
+    </div>
   );
 }
 
-/** Join/Create-kort (UI oförändrat) */
-function JoinCard({ onJoin, busy }: { onJoin: (code: string) => void; busy: boolean }) {
-  const [code, setCode] = useState<string>("");
+/** ---- Friends-tab (render) ---- */
 
+function FriendsTab({
+  friends,
+  pendingIn,
+  pendingOut,
+  q,
+  setQ,
+  results,
+}: {
+  friends: FriendsListUser[];
+  pendingIn: { requestId: string; from: FriendsListUser }[];
+  pendingOut: { requestId: string; to: FriendsListUser }[];
+  q: string;
+  setQ: (q: string) => void;
+  results: SearchUser[];
+}) {
   return (
-    <div className="rounded-2xl bg-neutral-900 p-5">
-      <h3 className="mb-3 text-lg font-semibold">Join group</h3>
+    <div className="space-y-6">
+      <div>
+        <h3 className="mb-2 text-lg font-semibold">Search</h3>
+        <input
+          className="w-full rounded-xl border border-neutral-800 bg-neutral-950/40 px-3 py-2 text-sm outline-none"
+          placeholder="Search by username…"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+        />
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2">
+        <div>
+          <h4 className="mb-1 font-medium">Results</h4>
+          <ul className="space-y-1">
+            {results.map((u) => (
+              <li key={u.id} className="flex items-center justify-between rounded-lg border border-neutral-800 px-3 py-2">
+                <span className="truncate">{u.displayName ?? u.username ?? "—"}</span>
+                <span className="text-xs opacity-70">{u.status}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        <div>
+          <h4 className="mb-1 font-medium">Friends</h4>
+          <ul className="space-y-1">
+            {friends.map((f) => (
+              <li key={f.id} className="flex items-center justify-between rounded-lg border border-neutral-800 px-3 py-2">
+                <span className="truncate">{f.displayName ?? f.username ?? "—"}</span>
+                <span className="text-xs opacity-70">Friend</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
+
+      <div>
+        <h4 className="mb-1 font-medium">Requests</h4>
+        <div className="grid gap-4 md:grid-cols-2">
+          <div>
+            <div className="mb-1 text-sm opacity-70">Incoming</div>
+            <ul className="space-y-1">
+              {pendingIn.map((r) => (
+                <li key={r.requestId} className="flex items-center justify-between rounded-lg border border-neutral-800 px-3 py-2">
+                  <span className="truncate">{r.from.displayName ?? r.from.username ?? "—"}</span>
+                  <span className="text-xs opacity-70">Pending</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+          <div>
+            <div className="mb-1 text-sm opacity-70">Outgoing</div>
+            <ul className="space-y-1">
+              {pendingOut.map((r) => (
+                <li key={r.requestId} className="flex items-center justify-between rounded-lg border border-neutral-800 px-3 py-2">
+                  <span className="truncate">{r.to.displayName ?? r.to.username ?? "—"}</span>
+                  <span className="text-xs opacity-70">Pending</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** ---- Små kort ---- */
+
+function JoinCard({ onJoin, busy }: { onJoin: (code: string) => void; busy: boolean }) {
+  const [code, setCode] = useState("");
+  return (
+    <div className="rounded-2xl border border-neutral-800 bg-neutral-950/40 p-3">
+      <div className="mb-2 text-sm opacity-70">Join an existing group</div>
       <input
-        className="mb-3 w-full rounded-xl border border-neutral-700 bg-neutral-800 px-3 py-2 text-neutral-100 outline-none focus:ring-2 focus:ring-violet-600"
+        className="mb-2 w-full rounded-xl border border-neutral-800 bg-neutral-950/40 px-3 py-2 text-sm outline-none"
         placeholder="Enter code (e.g. ABC123)…"
         value={code}
         onChange={(e) => setCode(e.target.value)}
@@ -669,13 +685,12 @@ function JoinCard({ onJoin, busy }: { onJoin: (code: string) => void; busy: bool
 }
 
 function CreateCard({ onCreate, busy }: { onCreate: (name?: string) => void; busy: boolean }) {
-  const [name, setName] = useState<string>("");
-
+  const [name, setName] = useState("");
   return (
-    <div className="rounded-2xl bg-neutral-900 p-5">
-      <h3 className="mb-3 text-lg font-semibold">Create group</h3>
+    <div className="rounded-2xl border border-neutral-800 bg-neutral-950/40 p-3">
+      <div className="mb-2 text-sm opacity-70">Create a new group</div>
       <input
-        className="mb-3 w-full rounded-2xl border border-neutral-700 bg-neutral-800 px-3 py-2 text-neutral-100 outline-none focus:ring-2 focus:ring-violet-600"
+        className="mb-2 w-full rounded-xl border border-neutral-800 bg-neutral-950/40 px-3 py-2 text-sm outline-none"
         placeholder="Group name (optional)…"
         value={name}
         onChange={(e) => setName(e.target.value)}

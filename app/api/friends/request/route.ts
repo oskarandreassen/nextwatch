@@ -6,91 +6,105 @@ import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import prisma from "@/lib/prisma";
 
-type Err = { ok: false; message: string };
-type Ok = { ok: true; requestId: string };
+type ApiOk = { ok: true; requestId: string };
+type ApiErr = { ok: false; message: string };
 
-type Body = {
-  toUserId?: string;
-  toUsername?: string;
-};
-
-type IdRow = { id: string };
-type ExistsRow = { exists: boolean };
-type ReqRow = { id: string };
+function json(body: ApiOk | ApiErr, init?: ResponseInit) {
+  return NextResponse.json(body, init);
+}
 
 export async function POST(req: NextRequest) {
-  const jar = await cookies();
-  const uid = jar.get("nw_uid")?.value ?? null;
-  if (!uid) return NextResponse.json({ ok: false, message: "Ingen session." } as Err, { status: 401 });
-
-  let body: Body;
   try {
-    body = (await req.json()) as Body;
+    const cookieStore = await cookies(); // App Router: alltid await
+    const me = cookieStore.get("nw_uid")?.value ?? "";
+    if (!me) return json({ ok: false, message: "Not authenticated." }, { status: 401 });
+
+    // Minimal, typad validering utan externa deps
+    let toUserId = "";
+    try {
+      const body = (await req.json()) as unknown;
+      if (typeof body === "object" && body && "toUserId" in (body as Record<string, unknown>)) {
+        const v = (body as Record<string, unknown>)["toUserId"];
+        if (typeof v === "string" && v.trim().length > 0) toUserId = v.trim();
+      }
+    } catch {
+      /* ignore */
+    }
+    if (!toUserId) return json({ ok: false, message: "toUserId required" }, { status: 400 });
+    if (toUserId === me) return json({ ok: false, message: "Cannot add yourself." }, { status: 400 });
+
+    // Båda användarna måste finnas
+    const [fromUser, toUser] = await Promise.all([
+      prisma.user.findUnique({ where: { id: me }, select: { id: true } }),
+      prisma.user.findUnique({ where: { id: toUserId }, select: { id: true } }),
+    ]);
+    if (!fromUser || !toUser) return json({ ok: false, message: "User not found." }, { status: 404 });
+
+    // Redan vänner?
+    const friendship = await prisma.friendship.findFirst({
+      where: {
+        OR: [
+          { userId: me, friendId: toUserId },
+          { userId: toUserId, friendId: me },
+        ],
+      },
+      select: { userId: true },
+    });
+    if (friendship) return json({ ok: true, requestId: "already_friends" });
+
+    // Pending i någon riktning?
+    const existing = await prisma.friendRequest.findFirst({
+      where: {
+        OR: [
+          { fromUserId: me, toUserId, status: "pending" },
+          { fromUserId: toUserId, toUserId: me, status: "pending" },
+        ],
+      },
+      select: { id: true, fromUserId: true, toUserId: true },
+    });
+
+    if (existing) {
+      // Om motparten redan skickat → auto-accept & skapa friendship
+      if (existing.fromUserId === toUserId && existing.toUserId === me) {
+        await prisma.$transaction(async (tx) => {
+          await tx.friendRequest.update({
+            where: { id: existing.id },
+            data: { status: "accepted", decidedAt: new Date() },
+          });
+
+          // Normalisera ordning i friendships (userId < friendId)
+          const a = me < toUserId ? me : toUserId;
+          const b = me < toUserId ? toUserId : me;
+
+          await tx.friendship.upsert({
+            where: { userId_friendId: { userId: a, friendId: b } },
+            update: {},
+            create: { userId: a, friendId: b },
+          });
+        });
+      }
+      return json({ ok: true, requestId: existing.id });
+    }
+
+    // Skapa ny pending (idempotent vid unique-conflict)
+    try {
+      const fr = await prisma.friendRequest.create({
+        data: { fromUserId: me, toUserId, status: "pending" },
+        select: { id: true },
+      });
+      return json({ ok: true, requestId: fr.id });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.includes("duplicate key") || msg.includes("23505")) {
+        const fr = await prisma.friendRequest.findFirst({
+          where: { fromUserId: me, toUserId, status: "pending" },
+          select: { id: true },
+        });
+        return json({ ok: true, requestId: fr?.id ?? "pending" });
+      }
+      return json({ ok: false, message: "Internal error." }, { status: 500 });
+    }
   } catch {
-    return NextResponse.json({ ok: false, message: "Ogiltig JSON." } as Err, { status: 400 });
+    return json({ ok: false, message: "Internal error." }, { status: 500 });
   }
-
-  const { toUserId, toUsername } = body;
-  if (!toUserId && !toUsername) {
-    return NextResponse.json({ ok: false, message: "Ange 'toUserId' eller 'toUsername'." } as Err, { status: 400 });
-  }
-
-  // resolve target id
-  let targetId: string | null = toUserId ?? null;
-  if (!targetId && toUsername) {
-    const rows = await prisma.$queryRaw<IdRow[]>`
-      SELECT id FROM users WHERE LOWER(username) = LOWER(${toUsername}) LIMIT 1
-    `;
-    targetId = rows[0]?.id ?? null;
-  }
-
-  if (!targetId) {
-    return NextResponse.json({ ok: false, message: "Användare hittades inte." } as Err, { status: 404 });
-  }
-  if (targetId === uid) {
-    return NextResponse.json({ ok: false, message: "Du kan inte skicka till dig själv." } as Err, { status: 400 });
-  }
-
-  // Redan vänner?
-  const a = targetId < uid ? targetId : uid;
-  const b = targetId < uid ? uid : targetId;
-
-  const friendExists = await prisma.$queryRaw<ExistsRow[]>`
-    SELECT EXISTS(
-      SELECT 1 FROM friendships WHERE user_id = ${a} AND friend_id = ${b}
-    ) AS exists
-  `;
-  if (friendExists[0]?.exists) {
-    return NextResponse.json({ ok: false, message: "Ni är redan vänner." } as Err, { status: 409 });
-  }
-
-  // Pending request redan?
-  const pending = await prisma.$queryRaw<ExistsRow[]>`
-    SELECT EXISTS(
-      SELECT 1
-      FROM friend_requests
-      WHERE status = 'pending'
-        AND (
-          (from_user_id = ${uid} AND to_user_id = ${targetId})
-          OR
-          (from_user_id = ${targetId} AND to_user_id = ${uid})
-        )
-    ) AS exists
-  `;
-  if (pending[0]?.exists) {
-    return NextResponse.json({ ok: false, message: "Det finns redan en väntande förfrågan." } as Err, { status: 409 });
-  }
-
-  // Skapa pending
-  const created = await prisma.$queryRaw<ReqRow[]>`
-    INSERT INTO friend_requests (id, from_user_id, to_user_id, status, created_at)
-    VALUES (gen_random_uuid(), ${uid}, ${targetId}, 'pending', NOW())
-    RETURNING id
-  `;
-  const requestId = created[0]?.id ?? null;
-  if (!requestId) {
-    return NextResponse.json({ ok: false, message: "Kunde inte skapa förfrågan." } as Err, { status: 500 });
-  }
-
-  return NextResponse.json({ ok: true, requestId } as Ok);
 }
