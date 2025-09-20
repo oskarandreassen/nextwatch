@@ -389,7 +389,7 @@ export default function SwipePageClient() {
 
       {/* Rate overlay */}
       {rateOpen && cards[0] && (
-        <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/50 backdrop-blur-sm">
+        <div className="fixed inset-0 z-40+ flex items-end justify-center bg-black/50 backdrop-blur-sm">
           <div className="mb-6 w-[92%] max-w-md rounded-2xl border border-white/10 bg-neutral-900 p-4 shadow-xl">
             <div className="mb-2 text-sm font-semibold text-white">
               Betygsätt: {cards[0].title}
