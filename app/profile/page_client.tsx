@@ -439,3 +439,7 @@ export default function ProfileClient() {
     </div>
   );
 }
+
+import LogoutButton from "@/app/components/auth/LogoutButton";
+// ...
+<LogoutButton className="mt-4" />

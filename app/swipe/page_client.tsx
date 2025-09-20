@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import { motion, useAnimation } from "framer-motion";
 
@@ -111,6 +111,76 @@ async function sendGroupVote(params: {
   }).catch(() => {});
 }
 
+/* ---------------- Details (overview/rating) med språk-fallback ---------------- */
+
+type DetailsDTO = {
+  id: number;
+  type?: MediaType;
+  title?: string;
+  overview?: string | null;
+  poster?: string | null;
+  poster_path?: string | null;
+  year?: number | null;
+  releaseYear?: number | null;
+  vote_average?: number | null;
+  rating?: number | null;
+  name?: string;
+};
+
+function parseDetails(d: unknown): {
+  overview: string | null;
+  rating: number | null;
+  poster: string | null;
+  title: string;
+  year: string | null;
+} | null {
+  if (typeof d !== "object" || !d) return null;
+  const o = d as DetailsDTO;
+
+  const title =
+    (typeof o.title === "string" && o.title) ||
+    (typeof o.name === "string" && o.name) ||
+    "Untitled";
+
+  const overview = typeof o.overview === "string" && o.overview.trim().length > 0 ? o.overview : null;
+  const rating =
+    typeof o.rating === "number"
+      ? o.rating
+      : typeof o.vote_average === "number"
+      ? o.vote_average
+      : null;
+
+  const posterPath = typeof o.poster === "string" ? o.poster : typeof o.poster_path === "string" ? o.poster_path : null;
+  const poster = toPoster(posterPath, "w780");
+
+  const y =
+    typeof o.year === "number"
+      ? String(o.year)
+      : typeof o.releaseYear === "number"
+      ? String(o.releaseYear)
+      : null;
+
+  return { overview, rating, poster, title, year: y };
+}
+
+async function fetchDetailsWithFallback(type: MediaType, id: number): Promise<ReturnType<typeof parseDetails>> {
+  // 1) försök med nuvarande locale (bestäms av server/cookies i route)
+  const p1 = fetch(`/api/tmdb/details?type=${type}&id=${id}`, { cache: "force-cache" })
+    .then((r) => (r.ok ? r.json() : null))
+    .catch(() => null);
+  const d1 = await p1;
+  let parsed = parseDetails(d1);
+  if (parsed && parsed.overview) return parsed;
+
+  // 2) fallback till en-US om ingen översikt kom
+  const p2 = fetch(`/api/tmdb/details?type=${type}&id=${id}&locale=en-US`, { cache: "force-cache" })
+    .then((r) => (r.ok ? r.json() : null))
+    .catch(() => null);
+  const d2 = await p2;
+  parsed = parseDetails(d2) ?? parsed;
+  return parsed;
+}
+
 /* ---------------- Component ---------------- */
 
 export default function SwipePageClient() {
@@ -127,25 +197,16 @@ export default function SwipePageClient() {
 
   const controls = useAnimation();
 
-  const topCard = cards[0];
-
   const loadPage = useCallback(
     async (targetPage: number, replace: boolean) => {
       if (loading) return;
       setLoading(true);
       try {
         const res = await fetch(`/api/recs/unified?page=${targetPage}`, { cache: "no-store" });
-        if (!res.ok) {
-          setHasMore(false);
-          return;
-        }
+        if (!res.ok) { setHasMore(false); return; }
         const data = (await res.json()) as UnifiedResp;
-        if (!("ok" in data) || !data.ok) {
-          setHasMore(false);
-          return;
-        }
+        if (!("ok" in data) || !data.ok) { setHasMore(false); return; }
 
-        // uppdatera badge-info varje laddning (stabilt även över pagination)
         setMode(data.mode);
         setGroup(data.group);
 
@@ -169,11 +230,9 @@ export default function SwipePageClient() {
           .filter((c) => !isHidden(c.tmdbId))
           .filter((c) => !isSeen(c.id));
 
-        if (replace) {
-          setCards(mapped);
-        } else {
-          setCards((prev) => [...prev, ...mapped]);
-        }
+        if (replace) setCards(mapped);
+        else setCards((prev) => [...prev, ...mapped]);
+
         setHasMore(mapped.length > 0);
       } finally {
         setLoading(false);
@@ -183,9 +242,7 @@ export default function SwipePageClient() {
   );
 
   // Första laddningen
-  useEffect(() => {
-    void loadPage(1, true);
-  }, [loadPage]);
+  useEffect(() => { void loadPage(1, true); }, [loadPage]);
 
   // Autoladda när det börjar ta slut
   useEffect(() => {
@@ -195,6 +252,55 @@ export default function SwipePageClient() {
       void loadPage(nextPage, false);
     }
   }, [cards.length, hasMore, loading, page, loadPage]);
+
+  // Hämta detaljer (overview/rating/poster) för toppkortet (och lite prefetch för nästa)
+  const fetched = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const cur = cards[0];
+    const nxt = cards[1];
+    (async () => {
+      if (cur && !fetched.current.has(cur.id)) {
+        fetched.current.add(cur.id);
+        const det = await fetchDetailsWithFallback(cur.mediaType, cur.tmdbId);
+        if (det) {
+          setCards((prev) =>
+            prev.map((c) =>
+              c.id === cur.id
+                ? {
+                    ...c,
+                    overview: c.overview ?? det.overview,
+                    rating: typeof c.rating === "number" ? c.rating : det.rating ?? null,
+                    poster: c.poster ?? det.poster,
+                    title: c.title || det.title,
+                    year: c.year ?? det.year,
+                  }
+                : c
+            )
+          );
+        }
+      }
+      if (nxt && !fetched.current.has(nxt.id)) {
+        fetched.current.add(nxt.id);
+        void fetchDetailsWithFallback(nxt.mediaType, nxt.tmdbId).then((det) => {
+          if (!det) return;
+          setCards((prev) =>
+            prev.map((c) =>
+              c.id === nxt.id
+                ? {
+                    ...c,
+                    overview: c.overview ?? det.overview,
+                    rating: typeof c.rating === "number" ? c.rating : det.rating ?? null,
+                    poster: c.poster ?? det.poster,
+                    title: c.title || det.title,
+                    year: c.year ?? det.year,
+                  }
+                : c
+            )
+          );
+        });
+      }
+    })();
+  }, [cards]);
 
   function popTop() {
     setFlippedId(null);
@@ -239,7 +345,7 @@ export default function SwipePageClient() {
     setFlippedId((prev) => (prev === c.id ? null : c.id));
   }
 
-  // Mobilvänliga thresholds: trigga på avstånd ELLER hastighet
+  // Mobilvänliga thresholds
   const DIST_THRESHOLD = 110;     // px
   const VELOCITY_THRESHOLD = 700; // px/s ungefär
 
@@ -247,7 +353,7 @@ export default function SwipePageClient() {
     <div className="relative mx-auto w-full max-w-md" style={{ minHeight: 620 }}>
       {/* Badge: visas bara i grupp-läge */}
       {mode === "group" && group?.code && (
-        <div className="pointer-events-none absolute top-2 left-1/2 z-30 -translate-x-1/2 rounded-full border border-violet-500/40 bg-violet-600/15 px-3 py-1 text-xs font-medium text-violet-200 backdrop-blur">
+        <div className="pointer-events-none absolute top-2 left-1/2 z-30 -translate-x-1/2 rounded-full border border-emerald-500/40 bg-emerald-600/15 px-3 py-1 text-xs font-medium text-emerald-200 backdrop-blur">
           Swiping as: <span className="font-mono tracking-wider">{group.code}</span>
         </div>
       )}
@@ -310,7 +416,7 @@ export default function SwipePageClient() {
         </div>
       )}
 
-      {/* FOOTER-KNAPPAR */}
+      {/* FOOTER-KNAPPAR – modernare stil + teal istället för gult */}
       <div className="pointer-events-auto absolute inset-x-0 bottom-6 z-20 flex items-center justify-center gap-8">
         <button
           aria-label="Nej"
@@ -323,7 +429,7 @@ export default function SwipePageClient() {
               await controls.start({ x: 0, rotate: 0, opacity: 1 });
             })()
           }
-          className="h-16 w-16 rounded-full bg-red-500/15 text-red-400 ring-2 ring-red-400/40 backdrop-blur transition hover:bg-red-500/25"
+          className="h-16 w-16 rounded-full bg-rose-500/15 text-rose-300 ring-2 ring-rose-400/40 backdrop-blur-md shadow-[0_10px_30px_rgba(244,63,94,0.25)] transition hover:bg-rose-500/25"
           title="Nej"
         >
           <span className="text-2xl">✖</span>
@@ -332,7 +438,7 @@ export default function SwipePageClient() {
         <button
           aria-label="Info"
           onClick={() => cards[0] && onInfo(cards[0])}
-          className="h-14 w-14 rounded-full bg-white/10 text-white ring-1 ring-white/30 backdrop-blur transition hover:bg-white/20"
+          className="h-14 w-14 rounded-full bg-white/10 text-white ring-1 ring-white/30 backdrop-blur-md shadow-[0_10px_30px_rgba(255,255,255,0.15)] transition hover:bg-white/20"
           title="Info"
         >
           <span className="text-xl">i</span>
@@ -349,7 +455,7 @@ export default function SwipePageClient() {
               await controls.start({ x: 0, rotate: 0, opacity: 1 });
             })()
           }
-          className="h-16 w-16 rounded-full bg-emerald-500/15 text-emerald-400 ring-2 ring-emerald-400/40 backdrop-blur transition hover:bg-emerald-500/25"
+          className="h-16 w-16 rounded-full bg-emerald-500/15 text-emerald-300 ring-2 ring-emerald-400/40 backdrop-blur-md shadow-[0_10px_30px_rgba(16,185,129,0.25)] transition hover:bg-emerald-500/25"
           title="Gilla"
         >
           <span className="text-2xl">❤</span>
@@ -418,9 +524,9 @@ function Front({ card }: { card: Card }) {
         </div>
       </div>
 
-      {/* Rating nere till höger */}
+      {/* Rating nere till höger – TEAL */}
       {typeof card.rating === "number" ? (
-        <div className="absolute bottom-2 right-2 rounded-md bg-black/70 px-2 py-1 text-xs font-semibold text-yellow-300">
+        <div className="absolute bottom-2 right-2 rounded-md bg-emerald-500/15 px-2 py-1 text-xs font-semibold text-emerald-300 ring-1 ring-emerald-400/40 backdrop-blur">
           ★ {card.rating.toFixed(1)}
         </div>
       ) : null}
@@ -435,7 +541,7 @@ function Back({ card }: { card: Card }) {
         {card.title} {card.year ? <span className="opacity-70">({card.year})</span> : null}
       </div>
       {typeof card.rating === "number" ? (
-        <div className="text-sm opacity-80">Betyg: ★ {card.rating.toFixed(1)} / 10</div>
+        <div className="text-sm text-emerald-300">Betyg: ★ {card.rating.toFixed(1)} / 10</div>
       ) : null}
       <div className="mt-2 max-h-[75%] overflow-auto text-sm leading-relaxed opacity-90">
         {card.overview || "Ingen beskrivning tillgänglig."}
