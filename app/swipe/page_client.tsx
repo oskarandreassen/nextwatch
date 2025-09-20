@@ -7,7 +7,7 @@ import { motion, useAnimation } from "framer-motion";
 type MediaType = "movie" | "tv";
 
 export type Card = {
-  id: string;                 // ex: "movie_123"
+  id: string; // ex: "movie_123"
   tmdbId: number;
   mediaType: MediaType;
   title: string;
@@ -38,10 +38,8 @@ type UnifiedResp =
     }
   | { ok: false; message?: string };
 
-/* ---------------- Local persistence (hide/seen) ---------------- */
-
-const HIDE_KEY = "nw_disliked_until"; // { [tmdbId]: epoch_ms_until }
-const SEEN_KEY = "nw_seen_ids";       // string[] av card.id
+const HIDE_KEY = "nw_disliked_until";
+const SEEN_KEY = "nw_seen_ids";
 
 function readHideMap(): Record<string, number> {
   try {
@@ -82,16 +80,11 @@ function readSeen(): Set<string> {
 function writeSeen(seen: Set<string>) {
   localStorage.setItem(SEEN_KEY, JSON.stringify(Array.from(seen)));
 }
-function isSeen(id: string): boolean {
-  return readSeen().has(id);
-}
 function markSeen(id: string) {
   const s = readSeen();
   s.add(id);
   writeSeen(s);
 }
-
-/* ---------------- Helpers ---------------- */
 
 function toPoster(p?: string | null, w: "w342" | "w500" | "w780" = "w780"): string | null {
   if (!p) return null;
@@ -111,8 +104,6 @@ async function sendGroupVote(params: {
   }).catch(() => {});
 }
 
-/* ---------------- Details (overview/rating) med språk-fallback ---------------- */
-
 type DetailsDTO = {
   id: number;
   type?: MediaType;
@@ -126,54 +117,51 @@ type DetailsDTO = {
   rating?: number | null;
   name?: string;
 };
-
-function parseDetails(d: unknown): {
-  overview: string | null;
-  rating: number | null;
-  poster: string | null;
-  title: string;
-  year: string | null;
-} | null {
+function parseDetails(d: unknown) {
   if (typeof d !== "object" || !d) return null;
   const o = d as DetailsDTO;
-
   const title =
     (typeof o.title === "string" && o.title) ||
     (typeof o.name === "string" && o.name) ||
     "Untitled";
-
-  const overview = typeof o.overview === "string" && o.overview.trim().length > 0 ? o.overview : null;
+  const overview =
+    typeof o.overview === "string" && o.overview.trim().length > 0
+      ? o.overview
+      : null;
   const rating =
     typeof o.rating === "number"
       ? o.rating
       : typeof o.vote_average === "number"
       ? o.vote_average
       : null;
-
-  const posterPath = typeof o.poster === "string" ? o.poster : typeof o.poster_path === "string" ? o.poster_path : null;
+  const posterPath =
+    typeof o.poster === "string"
+      ? o.poster
+      : typeof o.poster_path === "string"
+      ? o.poster_path
+      : null;
   const poster = toPoster(posterPath, "w780");
-
   const y =
     typeof o.year === "number"
       ? String(o.year)
       : typeof o.releaseYear === "number"
       ? String(o.releaseYear)
       : null;
-
   return { overview, rating, poster, title, year: y };
 }
-
-async function fetchDetailsWithFallback(type: MediaType, id: number): Promise<ReturnType<typeof parseDetails>> {
-  // 1) försök med nuvarande locale (bestäms av server/cookies i route)
-  const p1 = fetch(`/api/tmdb/details?type=${type}&id=${id}`, { cache: "force-cache" })
+async function fetchDetailsWithFallback(type: MediaType, id: number) {
+  const p1 = fetch(`/api/tmdb/details?type=${type}&id=${id}`, {
+    cache: "force-cache",
+  })
     .then((r) => (r.ok ? r.json() : null))
     .catch(() => null);
   const d1 = await p1;
   let parsed = parseDetails(d1);
   if (parsed && parsed.overview) return parsed;
 
-  // 2) fallback till en-US om ingen översikt kom
-  const p2 = fetch(`/api/tmdb/details?type=${type}&id=${id}&locale=en-US`, { cache: "force-cache" })
+  const p2 = fetch(`/api/tmdb/details?type=${type}&id=${id}&locale=en-US`, {
+    cache: "force-cache",
+  })
     .then((r) => (r.ok ? r.json() : null))
     .catch(() => null);
   const d2 = await p2;
@@ -181,31 +169,40 @@ async function fetchDetailsWithFallback(type: MediaType, id: number): Promise<Re
   return parsed;
 }
 
-/* ---------------- Component ---------------- */
-
 export default function SwipePageClient() {
   const [cards, setCards] = useState<Card[]>([]);
   const [page, setPage] = useState<number>(1);
   const [hasMore, setHasMore] = useState<boolean>(true);
-  const [loading, setLoading] = useState(false);
+  const [loadingUi, setLoadingUi] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [flippedId, setFlippedId] = useState<string | null>(null);
 
-  // NEW: badge-state
   const [mode, setMode] = useState<"group" | "individual">("individual");
   const [group, setGroup] = useState<{ code: string; strictProviders: boolean } | null>(null);
 
   const controls = useAnimation();
 
+  // Låser laddning utan att trigga effekter
+  const loadingRef = useRef(false);
+
   const loadPage = useCallback(
     async (targetPage: number, replace: boolean) => {
-      if (loading) return;
-      setLoading(true);
+      if (loadingRef.current) return;
+      loadingRef.current = true;
+      setLoadingUi(true);
       try {
-        const res = await fetch(`/api/recs/unified?page=${targetPage}`, { cache: "no-store" });
-        if (!res.ok) { setHasMore(false); return; }
+        const res = await fetch(`/api/recs/unified?page=${targetPage}`, {
+          cache: "no-store",
+        });
+        if (!res.ok) {
+          setHasMore(false);
+          return;
+        }
         const data = (await res.json()) as UnifiedResp;
-        if (!("ok" in data) || !data.ok) { setHasMore(false); return; }
+        if (!("ok" in data) || !data.ok) {
+          setHasMore(false);
+          return;
+        }
 
         setMode(data.mode);
         setGroup(data.group);
@@ -222,38 +219,42 @@ export default function SwipePageClient() {
               title: it.title,
               year: it.year ?? null,
               poster,
-              overview: null, // unified returnerar inte overview
-              rating: typeof it.vote_average === "number" ? it.vote_average : null,
+              overview: null,
+              rating:
+                typeof it.vote_average === "number" ? it.vote_average : null,
             };
           })
           .filter((v): v is Card => Boolean(v))
           .filter((c) => !isHidden(c.tmdbId))
-          .filter((c) => !isSeen(c.id));
+          .filter((c) => !readSeen().has(c.id));
 
         if (replace) setCards(mapped);
         else setCards((prev) => [...prev, ...mapped]);
 
         setHasMore(mapped.length > 0);
       } finally {
-        setLoading(false);
+        loadingRef.current = false;
+        setLoadingUi(false);
       }
     },
-    [loading]
+    []
   );
 
-  // Första laddningen
-  useEffect(() => { void loadPage(1, true); }, [loadPage]);
-
-  // Autoladda när det börjar ta slut
+  // Första laddningen – kör EN gång
   useEffect(() => {
-    if (!loading && cards.length < 3 && hasMore) {
-      const nextPage = page + 1;
-      setPage(nextPage);
-      void loadPage(nextPage, false);
-    }
-  }, [cards.length, hasMore, loading, page, loadPage]);
+    void loadPage(1, true);
+  }, [loadPage]);
 
-  // Hämta detaljer (overview/rating/poster) för toppkortet (och lite prefetch för nästa)
+  // Autoladda nästa sida när få kort återstår
+  useEffect(() => {
+    if (!loadingRef.current && cards.length < 3 && hasMore) {
+      const next = page + 1;
+      setPage(next);
+      void loadPage(next, false);
+    }
+  }, [cards.length, hasMore, page, loadPage]);
+
+  // Hämta detaljer (overview/rating/poster) för toppkortet + prefetch för nästa
   const fetched = useRef<Set<string>>(new Set());
   useEffect(() => {
     const cur = cards[0];
@@ -269,7 +270,8 @@ export default function SwipePageClient() {
                 ? {
                     ...c,
                     overview: c.overview ?? det.overview,
-                    rating: typeof c.rating === "number" ? c.rating : det.rating ?? null,
+                    rating:
+                      typeof c.rating === "number" ? c.rating : det.rating ?? null,
                     poster: c.poster ?? det.poster,
                     title: c.title || det.title,
                     year: c.year ?? det.year,
@@ -289,7 +291,8 @@ export default function SwipePageClient() {
                 ? {
                     ...c,
                     overview: c.overview ?? det.overview,
-                    rating: typeof c.rating === "number" ? c.rating : det.rating ?? null,
+                    rating:
+                      typeof c.rating === "number" ? c.rating : det.rating ?? null,
                     poster: c.poster ?? det.poster,
                     title: c.title || det.title,
                     year: c.year ?? det.year,
@@ -310,7 +313,9 @@ export default function SwipePageClient() {
   async function handleDislike(c: Card) {
     markSeen(c.id);
     hideFor7Days(c.tmdbId);
-    await sendGroupVote({ tmdbId: c.tmdbId, tmdbType: c.mediaType, vote: "DISLIKE" });
+    if (mode === "group" && group?.code) {
+      await sendGroupVote({ tmdbId: c.tmdbId, tmdbType: c.mediaType, vote: "DISLIKE" });
+    }
     popTop();
   }
 
@@ -335,7 +340,9 @@ export default function SwipePageClient() {
     } catch {
       setToast("Misslyckades att lägga till ❌");
     } finally {
-      await sendGroupVote({ tmdbId: c.tmdbId, tmdbType: c.mediaType, vote: "LIKE" });
+      if (mode === "group" && group?.code) {
+        await sendGroupVote({ tmdbId: c.tmdbId, tmdbType: c.mediaType, vote: "LIKE" });
+      }
       window.setTimeout(() => setToast(null), 1500);
       popTop();
     }
@@ -345,27 +352,23 @@ export default function SwipePageClient() {
     setFlippedId((prev) => (prev === c.id ? null : c.id));
   }
 
-  // Mobilvänliga thresholds
-  const DIST_THRESHOLD = 110;     // px
-  const VELOCITY_THRESHOLD = 700; // px/s ungefär
+  const DIST_THRESHOLD = 110;
+  const VELOCITY_THRESHOLD = 700;
 
   return (
     <div className="relative mx-auto w-full max-w-md" style={{ minHeight: 620 }}>
-      {/* Badge: visas bara i grupp-läge */}
       {mode === "group" && group?.code && (
         <div className="pointer-events-none absolute top-2 left-1/2 z-30 -translate-x-1/2 rounded-full border border-emerald-500/40 bg-emerald-600/15 px-3 py-1 text-xs font-medium text-emerald-200 backdrop-blur">
           Swiping as: <span className="font-mono tracking-wider">{group.code}</span>
         </div>
       )}
 
-      {/* Toast */}
       {toast && (
         <div className="fixed bottom-36 left-1/2 -translate-x-1/2 rounded-xl bg-black/85 px-4 py-2 text-sm text-white shadow">
           {toast}
         </div>
       )}
 
-      {/* ENDAST TOPPKORT RENDERAS */}
       {cards[0] ? (
         <motion.div
           key={cards[0].id}
@@ -377,8 +380,6 @@ export default function SwipePageClient() {
           onDragEnd={(_, info) => {
             const { x } = info.offset;
             const v = info.velocity.x;
-
-            // Right = like
             if (x > DIST_THRESHOLD || v > VELOCITY_THRESHOLD) {
               const c = cards[0];
               void controls
@@ -389,7 +390,6 @@ export default function SwipePageClient() {
                 });
               return;
             }
-            // Left = dislike
             if (x < -DIST_THRESHOLD || v < -VELOCITY_THRESHOLD) {
               const c = cards[0];
               void controls
@@ -400,7 +400,6 @@ export default function SwipePageClient() {
                 });
               return;
             }
-            // Snap back
             void controls.start({ x: 0, rotate: 0, transition: { type: "spring", stiffness: 320, damping: 28 } });
           }}
         >
@@ -412,11 +411,10 @@ export default function SwipePageClient() {
         </motion.div>
       ) : (
         <div className="absolute inset-0 flex items-center justify-center opacity-70">
-          {loading ? "Laddar..." : "Slut på förslag nu."}
+          {loadingUi ? "Laddar..." : "Slut på förslag nu."}
         </div>
       )}
 
-      {/* FOOTER-KNAPPAR – modernare stil + teal istället för gult */}
       <div className="pointer-events-auto absolute inset-x-0 bottom-6 z-20 flex items-center justify-center gap-8">
         <button
           aria-label="Nej"
@@ -465,8 +463,6 @@ export default function SwipePageClient() {
   );
 }
 
-/* ---------------- Card components ---------------- */
-
 function StaticCard({
   card,
   flipped,
@@ -482,11 +478,9 @@ function StaticCard({
         className="relative h-full w-full rounded-2xl border border-white/15 bg-black shadow-xl transition-transform duration-300 [transform-style:preserve-3d]"
         style={{ transform: flipped ? "rotateY(180deg)" : "rotateY(0deg)" }}
       >
-        {/* Front */}
         <div className="absolute inset-0 [backface-visibility:hidden]">
           <Front card={card} />
         </div>
-        {/* Back */}
         <div className="absolute inset-0 rotate-y-180 [backface-visibility:hidden] [transform:rotateY(180deg)]">
           <Back card={card} />
         </div>
@@ -513,7 +507,6 @@ function Front({ card }: { card: Card }) {
         <div className="flex h-full w-full items-center justify-center bg-neutral-800">{card.title}</div>
       )}
 
-      {/* Titel-overlay */}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 p-4">
         <div className="h-28 bg-gradient-to-t from-black/90 to-transparent" />
         <div className="-mt-24 px-1">
@@ -524,7 +517,6 @@ function Front({ card }: { card: Card }) {
         </div>
       </div>
 
-      {/* Rating nere till höger – TEAL */}
       {typeof card.rating === "number" ? (
         <div className="absolute bottom-2 right-2 rounded-md bg-emerald-500/15 px-2 py-1 text-xs font-semibold text-emerald-300 ring-1 ring-emerald-400/40 backdrop-blur">
           ★ {card.rating.toFixed(1)}
