@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 /** ---------- helpers ---------- */
 function cx(...xs: string[]): string {
@@ -346,26 +346,26 @@ export default function GroupClient({ initial }: { initial: GroupInitial }) {
   const [incoming, setIncoming] = useState<IncomingInvite | null>(null);
   const seenRef = useRef<Set<string>>(new Set());
 
-  // load members
-  const refreshMembers = async () => {
+  // load members (stabiliserad med useCallback för dependency-säkerhet)
+  const refreshMembers = useCallback(async () => {
     if (!code) return;
     const data = await getMembers(code);
     if (data.ok) {
       setMembers(Array.isArray(data.members) ? data.members : []);
       setRegion(data.region);
     }
-  };
+  }, [code]);
 
   // Auto-refresh medlemmar var 5s när i aktiv grupp
   useEffect(() => {
     if (!code || tab !== "group") return;
-    let t: ReturnType<typeof setInterval> | null = setInterval(() => {
+    const timer = setInterval(() => {
       void refreshMembers();
     }, 5000);
     return () => {
-      if (t) clearInterval(t);
+      clearInterval(timer);
     };
-  }, [code, tab]);
+  }, [code, tab, refreshMembers]);
 
   // switch tabs → load friends lists
   useEffect(() => {
@@ -454,14 +454,9 @@ export default function GroupClient({ initial }: { initial: GroupInitial }) {
     };
   }, [q, tab]);
 
-  /** --------- auto-leave (tidigare) behålls bortkommenterad om du vill ---------
-   * Vi kör inte auto-leave här för att inte överraska mellan invites.
-   * Lätt att återaktivera om du vill.
-   */
-
   // Poll för inkommande invites var 5s (visar popup EN i taget)
   useEffect(() => {
-    let t: ReturnType<typeof setInterval> | null = setInterval(async () => {
+    const timer = setInterval(async () => {
       const r = await listIncomingInvites();
       if (!r.ok) return;
       const arr = r.invites ?? [];
@@ -472,7 +467,7 @@ export default function GroupClient({ initial }: { initial: GroupInitial }) {
       }
     }, 5000);
     return () => {
-      if (t) clearInterval(t);
+      clearInterval(timer);
     };
   }, []);
 
@@ -599,9 +594,6 @@ function GroupTab({
   invitedIds: Set<string>;
   setInvitedIds: (s: Set<string>) => void;
 }) {
-  const [joinOpen, setJoinOpen] = useState(false);
-  const [createOpen, setCreateOpen] = useState(false);
-
   return (
     <div className="space-y-6">
       {code ? (
@@ -695,9 +687,6 @@ function GroupTab({
             <JoinCard onJoin={onJoin} busy={busy} />
             <CreateCard onCreate={onCreate} busy={busy} />
           </div>
-
-          {joinOpen ? <JoinCard onJoin={onJoin} busy={busy} /> : null}
-          {createOpen ? <CreateCard onCreate={onCreate} busy={busy} /> : null}
         </div>
       )}
     </div>
