@@ -1,10 +1,8 @@
-// app/group/GroupClient.tsx
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { GroupInitial as BaseGroupInitial, PublicMember as BasePublicMember } from "./page";
 
-/** ------- helpers ------- */
+/** ---------- helpers ---------- */
 function cx(...xs: string[]): string {
   return xs.filter(Boolean).join(" ");
 }
@@ -20,25 +18,34 @@ function has<T extends string>(o: unknown, key: T): o is Record<T, unknown> {
   return isRecord(o) && key in o;
 }
 
-/** ------- types (klient) ------- */
-type PublicMember = BasePublicMember & { providers?: string[] };
-type GroupInitial = BaseGroupInitial & { region?: string };
-
-type ApiOk = { ok: true };
-type ApiErr = { ok: false; message?: string };
-type Api<T> = (ApiOk & T) | ApiErr;
+/** ---------- types (klient) ---------- */
+// Dessa två bas-typerna speglar dina server-props. Behållna för UI-kompabilitet.
+type PublicMember = {
+  userId: string;
+  username: string | null;
+  displayName: string | null;
+  providers?: string[];
+};
+type GroupInitial = {
+  code: string | null;
+  region?: string;
+  members: PublicMember[];
+};
 
 type FriendsListUser = {
   id: string;
   username: string | null;
   displayName: string | null;
 };
-
 type FriendsListResp = {
   friends: FriendsListUser[];
   pendingIn: { requestId: string; from: FriendsListUser }[];
   pendingOut: { requestId: string; to: FriendsListUser }[];
 };
+
+type ApiOk = { ok: true };
+type ApiErr = { ok: false; message?: string };
+type Api<T> = (ApiOk & T) | ApiErr;
 
 type SearchStatus = "NONE" | "PENDING_OUT" | "PENDING_IN" | "ACCEPTED";
 type SearchUser = {
@@ -48,13 +55,14 @@ type SearchUser = {
   status: SearchStatus;
 };
 
-/** ------- API (tolerant parsing) ------- */
+/** ---------- API (tolerant parsing) ---------- */
 async function parseFriendsList(res: Response): Promise<Api<FriendsListResp>> {
   if (!res.ok) return { ok: false, message: "Kunde inte hämta vänner." };
   try {
     const data = (await res.json()) as unknown;
 
-    // Vanlig form: { ok:true, friends:[], pendingIn:[], pendingOut:[] }
+    // Förväntad ny form: { ok:true, friends:[{ other:{...} }], pendingIn:[], pendingOut:[] }
+    // Äldre platt form stöds också.
     if (isRecord(data)) {
       const friendsRaw = has(data, "friends") && Array.isArray(data.friends) ? data.friends : [];
       const inRaw = has(data, "pendingIn") && Array.isArray(data.pendingIn) ? data.pendingIn : [];
@@ -62,22 +70,41 @@ async function parseFriendsList(res: Response): Promise<Api<FriendsListResp>> {
 
       const friends: FriendsListUser[] = friendsRaw
         .filter(isRecord)
-        .map((u) => ({
-          id: String(u.id ?? ""),
-          username: (u.username ?? null) as string | null,
-          displayName: (u.displayName ?? null) as string | null,
-        }))
+        .map((row) => {
+          // Ny: rad.other finns
+          if (isRecord(row.other)) {
+            const other = row.other as Record<string, unknown>;
+            return {
+              id: String(other.id ?? ""),
+              username: (other.username ?? null) as string | null,
+              displayName: (other.displayName ?? null) as string | null,
+            };
+          }
+          // Platt fallback
+          return {
+            id: String(row.id ?? row.userId ?? ""),
+            username: (row.username ?? null) as string | null,
+            displayName: (row.displayName ?? null) as string | null,
+          };
+        })
+               // filtrera bort tomma id
         .filter((u) => u.id.length > 0);
 
       const pendingIn = inRaw
         .filter(isRecord)
         .map((r) => ({
           requestId: String(r.requestId ?? r.id ?? ""),
-          from: {
-            id: String((isRecord(r.from) ? r.from.id : r.fromId) ?? ""),
-            username: (isRecord(r.from) ? (r.from.username ?? null) : null) as string | null,
-            displayName: (isRecord(r.from) ? (r.from.displayName ?? null) : null) as string | null,
-          },
+          from: isRecord(r.from)
+            ? {
+                id: String((r.from as Record<string, unknown>).id ?? ""),
+                username: ((r.from as Record<string, unknown>).username ?? null) as string | null,
+                displayName: ((r.from as Record<string, unknown>).displayName ?? null) as string | null,
+              }
+            : {
+                id: String((r as Record<string, unknown>).fromUserId ?? ""),
+                username: null,
+                displayName: null,
+              },
         }))
         .filter((r) => r.requestId.length > 0 && r.from.id.length > 0);
 
@@ -85,18 +112,24 @@ async function parseFriendsList(res: Response): Promise<Api<FriendsListResp>> {
         .filter(isRecord)
         .map((r) => ({
           requestId: String(r.requestId ?? r.id ?? ""),
-          to: {
-            id: String((isRecord(r.to) ? r.to.id : r.toId) ?? ""),
-            username: (isRecord(r.to) ? (r.to.username ?? null) : null) as string | null,
-            displayName: (isRecord(r.to) ? (r.to.displayName ?? null) : null) as string | null,
-          },
+          to: isRecord(r.to)
+            ? {
+                id: String((r.to as Record<string, unknown>).id ?? ""),
+                username: ((r.to as Record<string, unknown>).username ?? null) as string | null,
+                displayName: ((r.to as Record<string, unknown>).displayName ?? null) as string | null,
+              }
+            : {
+                id: String((r as Record<string, unknown>).toUserId ?? ""),
+                username: null,
+                displayName: null,
+              },
         }))
         .filter((r) => r.requestId.length > 0 && r.to.id.length > 0);
 
       return { ok: true, friends, pendingIn, pendingOut };
     }
 
-    // Extrem legacy: [] → tolka som “friends”
+    // Äldre: rent array-svar
     if (Array.isArray(data)) {
       const friends: FriendsListUser[] = data
         .filter(isRecord)
@@ -196,26 +229,7 @@ async function leaveGroup(): Promise<Api<{ success: true }>> {
   return { ok: true, success: true };
 }
 
-async function createGroup(name?: string): Promise<Api<{ code: string }>> {
-  const res = await fetch("/api/group/create", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(name ? { name } : {}),
-  });
-  if (!res.ok) return { ok: false, message: "Kunde inte skapa grupp." };
-  try {
-    const data = (await res.json()) as unknown;
-    if (isRecord(data) && typeof data.code === "string") return { ok: true, code: data.code };
-    if (isRecord(data) && isRecord(data.group) && typeof data.group.code === "string") {
-      return { ok: true, code: String(data.group.code) };
-    }
-    return { ok: false, message: "Felaktigt svar." };
-  } catch {
-    return { ok: false, message: "Kunde inte tolka svar." };
-  }
-}
-
-/** ------- component ------- */
+/** ---------- component ---------- */
 export default function GroupClient({ initial }: { initial: GroupInitial }) {
   const [tab, setTab] = useState<"group" | "friends">("group");
 
@@ -280,14 +294,14 @@ export default function GroupClient({ initial }: { initial: GroupInitial }) {
   const handleCreate = async (name?: string) => {
     setBusy(true);
     setError(null);
-    const resp = await createGroup(name);
+    const resp = await joinGroup(name ?? "");
     setBusy(false);
     if (!resp.ok) return setError(resp.message ?? "Kunde inte skapa gruppen.");
     setCode(resp.code);
     await refreshMembers();
   };
 
-  const handleLeave = async () => {
+  const actuallyLeave = async () => {
     setBusy(true);
     setError(null);
     const resp = await leaveGroup();
@@ -295,6 +309,10 @@ export default function GroupClient({ initial }: { initial: GroupInitial }) {
     if (!resp.ok) return setError(resp.message ?? "Kunde inte lämna gruppen.");
     setCode(null);
     setMembers([]);
+  };
+
+  const handleLeave = async () => {
+    await actuallyLeave();
   };
 
   const handleJoin = async (groupCode: string) => {
@@ -325,7 +343,7 @@ export default function GroupClient({ initial }: { initial: GroupInitial }) {
     setSentToIds((prev) => new Set(prev).add(userId));
   };
 
-  // Debounced search (om/ när du kopplar på /api/friends/search)
+  // Debounced search (placeholder; koppla på din /api/friends/search när du vill)
   useEffect(() => {
     if (tab !== "friends") return;
     if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -335,13 +353,50 @@ export default function GroupClient({ initial }: { initial: GroupInitial }) {
         setResults([]);
         return;
       }
-      // placeholder: vänta in din riktiga /api/friends/search – lämna tom för nu
+      // TODO: koppla till /api/friends/search
       setResults([]);
     }, 250);
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
   }, [q, tab]);
+
+  /** --------- auto-leave: 15 min inaktivitet --------- */
+  useEffect(() => {
+    if (!code) return;
+
+    let last = Date.now();
+    let t: ReturnType<typeof setTimeout> | null = null;
+
+    const poke = () => {
+      last = Date.now();
+      if (t) clearTimeout(t);
+      t = setTimeout(async () => {
+        const diff = Date.now() - last;
+        if (diff >= 15 * 60 * 1000) {
+          await actuallyLeave();
+        }
+      }, 15 * 60 * 1000 + 1000);
+    };
+
+    const onActivity = () => poke();
+    const onVis = () => poke();
+
+    window.addEventListener("mousemove", onActivity);
+    window.addEventListener("keydown", onActivity);
+    window.addEventListener("touchstart", onActivity);
+    document.addEventListener("visibilitychange", onVis);
+
+    poke(); // start
+
+    return () => {
+      window.removeEventListener("mousemove", onActivity);
+      window.removeEventListener("keydown", onActivity);
+      window.removeEventListener("touchstart", onActivity);
+      document.removeEventListener("visibilitychange", onVis);
+      if (t) clearTimeout(t);
+    };
+  }, [code]);
 
   return (
     <div className="space-y-6">
@@ -388,7 +443,7 @@ export default function GroupClient({ initial }: { initial: GroupInitial }) {
   );
 }
 
-/** ------- Group tab ------- */
+/** ---------- Group tab ---------- */
 function GroupTab({
   code,
   region,
@@ -467,7 +522,7 @@ function GroupTab({
                     return (
                       <li key={m.userId} className="flex items-center justify-between rounded-xl border border-neutral-800 bg-neutral-950/40 px-3 py-2">
                         <div className="min-w-0">
-                          <div className="truncate font-medium">{m.displayName ?? m.username ?? "Okänd"}</div>
+                          <div className="truncate font-medium">{m.displayName ?? m.username ?? "—"}</div>
                           {Array.isArray(m.providers) && m.providers.length > 0 ? (
                             <div className="mt-0.5 flex flex-wrap gap-1">
                               {m.providers.map((p) => (
@@ -532,7 +587,7 @@ function GroupTab({
   );
 }
 
-/** ------- Friends tab ------- */
+/** ---------- Friends tab ---------- */
 function FriendsTab({
   friends,
   pendingIn,
@@ -548,7 +603,7 @@ function FriendsTab({
   setQ: (q: string) => void;
   results: SearchUser[];
 }) {
-  // allt här map:ar enbart på arrays som redan defaultas till []
+  // all .map kör på arrayer som defaultas till []
   return (
     <div className="space-y-6">
       <div>
@@ -618,7 +673,7 @@ function FriendsTab({
   );
 }
 
-/** ------- small cards ------- */
+/** ---------- small cards ---------- */
 function JoinCard({ onJoin, busy }: { onJoin: (code: string) => void; busy: boolean }) {
   const [code, setCode] = useState("");
   return (
@@ -630,7 +685,7 @@ function JoinCard({ onJoin, busy }: { onJoin: (code: string) => void; busy: bool
         value={code}
         onChange={(e) => setCode(e.target.value)}
       />
-      <button onClick={() => onJoin(code)} disabled={busy} className="rounded-xl bg-violet-600 px-4 py-2 text-white hover:bg-violet-500 disabled:opacity-60">
+      <button onClick={() => onJoin(code)} disabled={busy} className="rounded-2xl bg-violet-600 px-4 py-2 text-white hover:bg-violet-500 disabled:opacity-60">
         Join
       </button>
     </div>

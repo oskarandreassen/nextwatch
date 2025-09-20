@@ -4,79 +4,81 @@ export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import prisma from "@/lib/prisma";
+import { prisma } from "@/lib/prisma";
 
-type Row = {
-  user_id: string;
-  friend_id: string;
-  created_at: Date;
-
-  user_username: string | null;
-  user_display_name: string | null;
-  friend_username: string | null;
-  friend_display_name: string | null;
-};
-
-type FriendDTO = {
-  id: string;
-  userId: string;
-  friendId: string;
-  createdAt: string;
-  other: {
-    id: string;
-    username: string | null;
-    displayName: string | null;
-  };
-};
-
-type Ok = { ok: true; friends: FriendDTO[] };
-type Err = { ok: false; message: string };
+type FriendsListUser = { id: string; username: string | null; displayName: string | null };
 
 export async function GET() {
-  const jar = await cookies();
-  const uid = jar.get("nw_uid")?.value ?? null;
-  if (!uid) {
-    const body: Err = { ok: false, message: "Ingen session." };
-    return NextResponse.json(body, { status: 401 });
-  }
+  try {
+    const cookieStore = await cookies();
+    const me = cookieStore.get("nw_uid")?.value ?? "";
+    if (!me) return NextResponse.json({ ok: false, message: "Not authenticated." }, { status: 401 });
 
-  const rows = await prisma.$queryRaw<Row[]>`
-    SELECT
-      f.user_id,
-      f.friend_id,
-      f.created_at,
-      u1.username AS user_username,
-      p1.display_name AS user_display_name,
-      u2.username AS friend_username,
-      p2.display_name AS friend_display_name
-    FROM friendships f
-    JOIN users u1 ON u1.id = f.user_id
-    LEFT JOIN profiles p1 ON p1.user_id = f.user_id
-    JOIN users u2 ON u2.id = f.friend_id
-    LEFT JOIN profiles p2 ON p2.user_id = f.friend_id
-    WHERE f.user_id = ${uid} OR f.friend_id = ${uid}
-    ORDER BY f.created_at DESC
-  `;
-
-  const friends: FriendDTO[] = rows.map((r) => {
-    const otherIsFriendSide = r.user_id === uid;
-    const otherId = otherIsFriendSide ? r.friend_id : r.user_id;
-    const otherUsername = otherIsFriendSide ? r.friend_username : r.user_username;
-    const otherDisplay = otherIsFriendSide ? r.friend_display_name : r.user_display_name;
-
-    return {
-      id: `${r.user_id}_${r.friend_id}`,
-      userId: r.user_id,
-      friendId: r.friend_id,
-      createdAt: r.created_at.toISOString(),
-      other: {
-        id: otherId,
-        username: otherUsername,
-        displayName: otherDisplay,
+    // Vänner (båda ordningar)
+    const friendships = await prisma.friendship.findMany({
+      where: { OR: [{ userId: me }, { friendId: me }] },
+      include: {
+        user: { select: { id: true, username: true, profile: { select: { displayName: true } } } },
+        friend: { select: { id: true, username: true, profile: { select: { displayName: true } } } },
       },
-    };
-  });
+      orderBy: { createdAt: "desc" },
+    });
 
-  const body: Ok = { ok: true, friends };
-  return NextResponse.json(body);
+    const friends = friendships.map((f) => {
+      const other = f.userId === me ? f.friend : f.user;
+      const otherUser: FriendsListUser = {
+        id: other.id,
+        username: other.username,
+        displayName: other.profile?.displayName ?? null,
+      };
+      return {
+        id: `${f.userId}_${f.friendId}`,
+        userId: f.userId,
+        friendId: f.friendId,
+        other: otherUser,
+        createdAt: f.createdAt,
+      };
+    });
+
+    // Pending inkommande
+    const pendingIn = await prisma.friendRequest.findMany({
+      where: { toUserId: me, status: "pending" },
+      include: {
+        fromUser: { select: { id: true, username: true, profile: { select: { displayName: true } } } },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    // Pending utgående
+    const pendingOut = await prisma.friendRequest.findMany({
+      where: { fromUserId: me, status: "pending" },
+      include: {
+        toUser: { select: { id: true, username: true, profile: { select: { displayName: true } } } },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    return NextResponse.json({
+      ok: true,
+      friends,
+      pendingIn: pendingIn.map((r) => ({
+        requestId: r.id,
+        from: {
+          id: r.fromUser.id,
+          username: r.fromUser.username,
+          displayName: r.fromUser.profile?.displayName ?? null,
+        },
+      })),
+      pendingOut: pendingOut.map((r) => ({
+        requestId: r.id,
+        to: {
+          id: r.toUser.id,
+          username: r.toUser.username,
+          displayName: r.toUser.profile?.displayName ?? null,
+        },
+      })),
+    });
+  } catch (e) {
+    return NextResponse.json({ ok: false, message: "Internal error." }, { status: 500 });
+  }
 }

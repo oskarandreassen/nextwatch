@@ -1,39 +1,32 @@
-// app/api/groups/leave/route.ts
+// app/api/group/leave/route.ts
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import prisma from "@/lib/prisma";
+import { prisma } from "@/lib/prisma";
 
-type Body = { code?: string };
+export async function POST() {
+  try {
+    const store = await cookies();
+    const me = store.get("nw_uid")?.value ?? "";
+    const code = store.get("nw_group")?.value ?? "";
+    if (!me) return NextResponse.json({ ok: false, message: "Not authenticated." }, { status: 401 });
 
-export async function POST(req: NextRequest) {
-  const jar = await cookies();
-  const uid = jar.get("nw_uid")?.value ?? null;
-  if (!uid) return NextResponse.json({ ok: false, message: "Ingen session." }, { status: 401 });
+    if (code) {
+      await prisma.groupMember.deleteMany({ where: { groupCode: code, userId: me } });
+    }
 
-  const body = (await req.json()) as Body;
-  const code = (body.code ?? "").trim().toUpperCase();
-  if (code.length < 4) return NextResponse.json({ ok: false, message: "Ogiltig kod." }, { status: 400 });
-
-  // Ta bort medlemskap om det finns
-  await prisma.groupMember.deleteMany({
-    where: { groupCode: code, userId: uid },
-  });
-
-  // Om aktiv cookie pekar på samma grupp — ta bort den
-  const res = NextResponse.json({ ok: true });
-  const current = jar.get("nw_group")?.value ?? null;
-  if (current === code) {
+    const res = NextResponse.json({ ok: true, left: true });
+    // ta bort cookie
     res.cookies.set({
       name: "nw_group",
       value: "",
-      httpOnly: true,
-      sameSite: "lax",
       path: "/",
-      maxAge: 0,
+      expires: new Date(0),
     });
+    return res;
+  } catch {
+    return NextResponse.json({ ok: false, message: "Internal error." }, { status: 500 });
   }
-  return res;
 }
