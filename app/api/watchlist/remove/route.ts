@@ -6,52 +6,38 @@ import { PrismaClient } from "@prisma/client";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-let prisma: PrismaClient | undefined;
-function getPrisma() {
-  if (!prisma) prisma = new PrismaClient();
-  return prisma;
-}
+const prisma = new PrismaClient();
 
-type Body = {
-  tmdbId: number;
-  mediaType: "movie" | "tv";
-};
+type Body = { tmdbId: number; mediaType: "movie" | "tv" };
 
 function bad(message: string, status = 400) {
   return NextResponse.json({ ok: false, message }, { status });
-}
-function ok(payload: Record<string, unknown> = {}) {
-  return NextResponse.json({ ok: true, ...payload });
 }
 
 export async function POST(req: Request) {
   try {
     const c = await cookies();
     const uid = c.get("nw_uid")?.value;
-    if (!uid) return bad("Ingen session hittades (nw_uid saknas).", 401);
+    if (!uid) return bad("Ingen session (nw_uid saknas).", 401);
 
     const body = (await req.json()) as Body;
     const tmdbId = Number(body.tmdbId);
     const mediaType = body.mediaType;
 
-    if (!Number.isFinite(tmdbId) || (mediaType !== "movie" && mediaType !== "tv")) {
-      return bad("Ogiltig payload.");
-    }
+    if (!Number.isFinite(tmdbId) || tmdbId <= 0) return bad("Ogiltigt tmdbId.");
+    if (mediaType !== "movie" && mediaType !== "tv") return bad("Ogiltig mediaType.");
 
-    const db = getPrisma();
+    // Rå SQL så vi slipper ev. Prisma-fältnamnsskillnader
+    await prisma.$executeRawUnsafe(
+      `DELETE FROM public.watchlist WHERE user_id = $1 AND tmdb_id = $2 AND media_type = $3;`,
+      uid,
+      tmdbId,
+      mediaType
+    );
 
-    const existing = await db.watchlist.findFirst({
-      where: { userId: uid, tmdbId, mediaType },
-      select: { id: true },
-    });
-
-    if (existing) {
-      await db.watchlist.delete({ where: { id: existing.id } });
-    }
-
-    return ok();
+    return NextResponse.json({ ok: true });
   } catch (err) {
-    console.error("watchlist/remove error", err);
-    return bad("Prisma-fel.", 500);
+    console.error("watchlist/remove error:", err);
+    return NextResponse.json({ ok: false, message: "Kunde inte ta bort titel från watchlist." }, { status: 500 });
   }
 }

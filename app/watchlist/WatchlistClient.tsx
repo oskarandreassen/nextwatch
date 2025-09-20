@@ -20,22 +20,12 @@ type Providers = {
   rent?: { provider_name: string; logo_path: string | null }[];
   buy?: { provider_name: string; logo_path: string | null }[];
 };
+type ProvidersResp = { ok: boolean; region?: string; providers: Providers | null };
 
-type ProvidersResp = {
-  ok: boolean;
-  region?: string;
-  providers: Providers | null;
-};
-
-type Detail = {
-  overview?: string;
-  runtime?: number;
-  episode_run_time?: number[];
-};
+type Detail = { overview?: string };
 
 async function fetchProviders(id: number, tmdbType: 'movie' | 'tv'): Promise<ProvidersResp> {
-  const url = `/api/tmdb/watch-providers?id=${id}&type=${tmdbType}`;
-  const res = await fetch(url, { cache: 'no-store' });
+  const res = await fetch(`/api/tmdb/watch-providers?id=${id}&type=${tmdbType}`, { cache: 'no-store' });
   return (await res.json()) as ProvidersResp;
 }
 
@@ -45,24 +35,53 @@ async function fetchDetail(id: number, tmdbType: 'movie' | 'tv'): Promise<Detail
   return (await res.json()) as Detail;
 }
 
-export default function WatchlistClient({ items }: { items: WatchItem[] }) {
+export default function WatchlistClient({ items: initial }: { items: WatchItem[] }) {
+  const [items, setItems] = useState<WatchItem[]>(initial);
   const [active, setActive] = useState<WatchItem | null>(null);
   const [providers, setProviders] = useState<Providers | null>(null);
   const [detail, setDetail] = useState<Detail>({});
   const [loading, setLoading] = useState(false);
+  const [q, setQ] = useState('');
+  const [cols, setCols] = useState<1 | 2 | 3 | 4>(2);
+
+  const filtered = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    if (!needle) return items;
+    return items.filter((it) => it.title.toLowerCase().includes(needle));
+  }, [q, items]);
+
+  const gridClass = useMemo(() => {
+    switch (cols) {
+      case 1: return 'grid-cols-1';
+      case 2: return 'grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4';
+      case 3: return 'grid-cols-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5';
+      case 4: return 'grid-cols-4 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8';
+    }
+  }, [cols]);
 
   const open = useCallback(async (item: WatchItem) => {
     setActive(item);
     setLoading(true);
     try {
-      const [p, d] = await Promise.all([
-        fetchProviders(item.id, item.tmdbType),
-        fetchDetail(item.id, item.tmdbType),
-      ]);
+      const [p, d] = await Promise.all([fetchProviders(item.id, item.tmdbType), fetchDetail(item.id, item.tmdbType)]);
       setProviders(p.ok ? p.providers : null);
       setDetail(d);
     } finally {
       setLoading(false);
+    }
+  }, []);
+
+  const remove = useCallback(async (item: WatchItem) => {
+    // Optimistisk uppdatering
+    setItems((cur) => cur.filter((x) => !(x.id === item.id && x.tmdbType === item.tmdbType)));
+    const res = await fetch('/api/watchlist/remove', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tmdbId: item.id, mediaType: item.tmdbType }),
+    });
+    if (!res.ok) {
+      // Rollback om API faller
+      setItems((cur) => [...cur, item].sort((a, b) => a.title.localeCompare(b.title)));
     }
   }, []);
 
@@ -72,7 +91,7 @@ export default function WatchlistClient({ items }: { items: WatchItem[] }) {
     setDetail({});
   }, []);
 
-  const groups = useMemo(() => {
+  const providerGroups = useMemo(() => {
     if (!providers) return [];
     const out: { label: string; list: NonNullable<Providers['flatrate']> }[] = [];
     if (providers.flatrate?.length) out.push({ label: 'Streama', list: providers.flatrate });
@@ -81,55 +100,85 @@ export default function WatchlistClient({ items }: { items: WatchItem[] }) {
     return out;
   }, [providers]);
 
-  if (!items.length) {
-    return <p className="text-neutral-400">Din watchlist är tom.</p>;
-  }
-
   return (
     <>
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
-        {items.map((it) => (
-          <button
-            key={`${it.tmdbType}-${it.id}`}
-            onClick={() => open(it)}
-            className="group relative overflow-hidden rounded-2xl bg-neutral-800 transition hover:ring-2 hover:ring-violet-500"
-          >
-            <div className="relative h-64 w-full">
-              <Image
-                src={it.posterUrl}
-                alt={it.title}
-                fill
-                sizes="(max-width:768px) 50vw, (max-width:1200px) 25vw, 20vw"
-                className="object-cover"
-                priority={false}
-              />
-            </div>
-            <div className="flex items-center justify-between px-3 py-2 text-left">
-              <div className="truncate">
-                <p className="truncate text-sm font-semibold text-white">{it.title}</p>
-                <p className="text-xs text-neutral-400">
-                  {it.year ?? ''}{it.year && it.rating ? ' • ' : ''}{typeof it.rating === 'number' ? it.rating.toFixed(1) : ''}
-                </p>
-              </div>
-              <span className="ml-2 rounded-md bg-neutral-700 px-2 py-0.5 text-xs text-neutral-200">
-                Visa
-              </span>
-            </div>
-          </button>
-        ))}
+      <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="Sök titel…"
+          className="w-full rounded-xl bg-neutral-800 px-3 py-2 text-sm text-white outline-none ring-1 ring-neutral-700 focus:ring-violet-500 sm:max-w-sm"
+        />
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-neutral-400">Visa:</span>
+          {[1, 2, 3, 4].map((n) => (
+            <button
+              key={n}
+              onClick={() => setCols(n as 1 | 2 | 3 | 4)}
+              className={`rounded-md px-2 py-1 text-xs ${
+                cols === n ? 'bg-violet-600 text-white' : 'bg-neutral-800 text-neutral-200'
+              }`}
+            >
+              {n}/rad
+            </button>
+          ))}
+        </div>
       </div>
+
+      {filtered.length === 0 ? (
+        <p className="text-neutral-400">Inga träffar.</p>
+      ) : (
+        <div className={`grid ${gridClass} gap-3`}>
+          {filtered.map((it) => (
+            <div
+              key={`${it.tmdbType}-${it.id}`}
+              className="group relative overflow-hidden rounded-2xl bg-neutral-800 transition hover:ring-2 hover:ring-violet-500"
+            >
+              <button
+                aria-label="Ta bort från watchlist"
+                onClick={() => remove(it)}
+                className="absolute right-2 top-2 z-10 rounded-full bg-neutral-900/70 p-2 text-neutral-200 opacity-0 ring-1 ring-neutral-700 transition hover:bg-red-600 hover:text-white group-hover:opacity-100"
+              >
+                {/* trash icon */}
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M3 6h18M9 6v-.5A1.5 1.5 0 0 1 10.5 4h3A1.5 1.5 0 0 1 15 5.5V6m-8 0v12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2V6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                  <path d="M10 10v6M14 10v6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                </svg>
+              </button>
+
+              <button onClick={() => open(it)} className="block w-full">
+                <div className="relative h-72 w-full">
+                  <Image
+                    src={it.posterUrl}
+                    alt={it.title}
+                    fill
+                    sizes="(max-width:768px) 50vw, (max-width:1200px) 25vw, 20vw"
+                    className="object-cover"
+                    priority={false}
+                  />
+                </div>
+                <div className="flex items-center justify-between px-3 py-2 text-left">
+                  <div className="truncate">
+                    <p className="truncate text-sm font-semibold text-white">{it.title}</p>
+                    <p className="text-xs text-neutral-400">
+                      {it.year ?? ''}{it.year && typeof it.rating === 'number' ? ' • ' : ''}{typeof it.rating === 'number' ? it.rating.toFixed(1) : ''}
+                    </p>
+                  </div>
+                  <span className="ml-2 rounded-md bg-neutral-700 px-2 py-0.5 text-xs text-neutral-200">
+                    Visa
+                  </span>
+                </div>
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
 
       <Modal open={Boolean(active)} onClose={close} labelledBy="watchlist-modal-title">
         {active && (
           <div className="flex flex-col gap-4 md:flex-row">
             <div className="relative mx-auto h-[320px] w-[220px] shrink-0 overflow-hidden rounded-2xl md:mx-0">
-              <Image
-                src={active.posterUrl}
-                alt={active.title}
-                fill
-                sizes="220px"
-                className="object-cover"
-              />
+              <Image src={active.posterUrl} alt={active.title} fill sizes="220px" className="object-cover" />
             </div>
 
             <div className="min-w-0 flex-1">
@@ -145,10 +194,10 @@ export default function WatchlistClient({ items }: { items: WatchItem[] }) {
               </p>
 
               <div className="mt-4 space-y-3">
-                {groups.length === 0 && !loading && (
+                {providerGroups.length === 0 && !loading && (
                   <p className="text-sm text-neutral-400">Ingen tillgänglig streamingdata för din region just nu.</p>
                 )}
-                {groups.map(({ label, list }) => (
+                {providerGroups.map(({ label, list }) => (
                   <div key={label}>
                     <p className="mb-2 text-xs uppercase tracking-wide text-neutral-400">{label}</p>
                     <div className="flex flex-wrap items-center gap-2">

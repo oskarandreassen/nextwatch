@@ -56,9 +56,9 @@ model Profile {
   updatedAt        DateTime @default(now()) @map("updated_at")
 
   // Smakprofil
-  displayName    String? @map("display_name")
-  favoriteMovie  Json?   @map("favorite_movie") // JSONB
-  favoriteShow   Json?   @map("favorite_show")  // JSONB
+  displayName    String?  @map("display_name")
+  favoriteMovie  Json?    @map("favorite_movie") // JSONB
+  favoriteShow   Json?    @map("favorite_show")  // JSONB
   favoriteGenres String[] @default([]) @map("favorite_genres")   // text[]
   dislikedGenres String[] @default([]) @map("disliked_genres")   // text[]
 
@@ -83,24 +83,37 @@ model Verification {
 }
 
 model Rating {
+  // OBS: vi behåller ditt id (DB-kompatibilitet) men använder även en
+  // sammansatt UNIQUE så att Prisma kan upserta på (userId, tmdbId, mediaType).
   id        String   @id
   userId    String   @map("user_id")
   tmdbId    Int      @map("tmdb_id")
   mediaType String   @map("media_type")
-  decision  String
+
+  // Nytt: numeriskt betyg 1–10 (valfritt)
+  rating    Int?
+
+  // Behåll ditt fält men gör det smidigt för nyinlägg
+  decision  String   @default("RATED")
+
   decidedAt DateTime @default(now()) @map("decided_at")
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  // Den här fanns redan som index – vi behåller den
   @@index([userId, tmdbId, mediaType], map: "idx_ratings_user_tmdb")
+
+  // Nytt: sammansatt UNIQUE så att Prisma kan göra upsert
+  @@unique([userId, tmdbId, mediaType], map: "ratings_user_tmdb_media_unique")
+
   @@map("ratings")
 }
 
 model watchlist {
-  id        String  @id
-  userId    String  @map("user_id")
-  tmdbId    Int     @map("tmdb_id")
-  mediaType String  @map("media_type")
+  id        String   @id
+  userId    String   @map("user_id")
+  tmdbId    Int      @map("tmdb_id")
+  mediaType String   @map("media_type")
   addedAt   DateTime @default(now()) @map("added_at")
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -150,11 +163,11 @@ model GroupMember {
 }
 
 model GroupVote {
-  groupCode String  @map("group_code")
-  userId    String  @map("user_id")
-  tmdbId    Int     @map("tmdb_id")
-  tmdbType  String  @map("tmdb_type") // 'movie' | 'tv' (DB: CHECK)
-  vote      String  // 'LIKE' | 'DISLIKE' | 'SKIP' (DB: CHECK)
+  groupCode String   @map("group_code")
+  userId    String   @map("user_id")
+  tmdbId    Int      @map("tmdb_id")
+  tmdbType  String   @map("tmdb_type") // 'movie' | 'tv' (DB: CHECK)
+  vote      String   // 'LIKE' | 'DISLIKE' | 'SKIP' (DB: CHECK)
   decidedAt DateTime @default(now()) @map("decided_at")
 
   group Group @relation("GroupVotes", fields: [groupCode], references: [code], onDelete: Cascade)
@@ -165,10 +178,10 @@ model GroupVote {
 }
 
 model FriendRequest {
-  id         String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  fromUserId String  @map("from_user_id")
-  toUserId   String  @map("to_user_id")
-  status     String  @default("pending") // pending | accepted | declined | cancelled
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  fromUserId String   @map("from_user_id")
+  toUserId   String   @map("to_user_id")
+  status     String   @default("pending") // pending | accepted | declined | cancelled
   createdAt  DateTime @default(now()) @map("created_at")
   decidedAt  DateTime? @map("decided_at")
 

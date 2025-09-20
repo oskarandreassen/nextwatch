@@ -237,7 +237,6 @@ async function fetchProvidersDirect(id: number, type: MediaType, region: string)
   if (!data) return null;
   const regionData = data.results?.[region];
   if (regionData) return regionData;
-  // Fallback: EU-lik region eller US om inget annat finns
   return data.results["US"] ?? null;
 }
 function providerNames(p: Providers | null): string[] {
@@ -249,13 +248,9 @@ function providerNames(p: Providers | null): string[] {
   return Array.from(names);
 }
 
-/* ---------------- Simple mapLimit for concurrency ---------------- */
+/* ---------------- mapLimit (concurrency) ---------------- */
 
-async function mapLimit<T, U>(
-  arr: T[],
-  limit: number,
-  fn: (t: T) => Promise<U>,
-): Promise<U[]> {
+async function mapLimit<T, U>(arr: T[], limit: number, fn: (t: T) => Promise<U>): Promise<U[]> {
   const out = new Array<U>(arr.length);
   let i = 0;
   const runners = new Array(Math.min(limit, arr.length)).fill(0).map(async () => {
@@ -323,17 +318,8 @@ export async function GET(req: Request) {
       tmdbGet<TMDBPaged<TMDBListItem>>("/tv/popular", { language: locale, region, page: pageNum }, "force-cache"),
     ]);
 
-    const baseRaw: { id: number; tmdbType: MediaType; item: TMDBListItem }[] = [];
-    for (const r of trMovie.results) baseRaw.push({ id: r.id, tmdbType: "movie", item: r });
-    for (const r of trTv.results) baseRaw.push({ id: r.id, tmdbType: "tv", item: r });
-    for (const r of popMovie.results) baseRaw.push({ id: r.id, tmdbType: "movie", item: r });
-    for (const r of popTv.results) baseRaw.push({ id: r.id, tmdbType: "tv", item: r });
-
-    // Seeds (favoriter + watchlist)
-    const seedsSet: { id: number; type: MediaType }[] = [];
-    if (profile.favoriteMovie?.id) seedsSet.push({ id: profile.favoriteMovie.id, type: "movie" });
-    if (profile.favoriteShow?.id) seedsSet.push({ id: profile.favoriteShow.id, type: "tv" });
-
+    // Läs watchlist för att filtrera bort dubbletter i swipen
+    const watchKeys = new Set<string>();
     const wlRes = await fetch(`${new URL(req.url).origin}/api/watchlist/list`, {
       headers: { cookie: cookieHeader },
       cache: "no-store",
@@ -345,21 +331,51 @@ export async function GET(req: Request) {
         const o = it as Record<string, unknown>;
         const id = Number((o["tmdbId"] as number | undefined) ?? (o["tmdb_id"] as number | undefined) ?? (o["id"] as number | undefined));
         const mt = (o["mediaType"] as string | undefined) ?? (o["media_type"] as string | undefined);
-        if (Number.isFinite(id) && (mt === "movie" || mt === "tv")) seedsSet.push({ id, type: mt });
+        if (Number.isFinite(id) && (mt === "movie" || mt === "tv")) watchKeys.add(`${mt}_${id}`);
       }
     }
 
-    const seen = new Set<string>();
+    const baseRaw: { id: number; tmdbType: MediaType; item: TMDBListItem }[] = [];
+    for (const r of trMovie.results) {
+      const k = `movie_${r.id}`;
+      if (!watchKeys.has(k)) baseRaw.push({ id: r.id, tmdbType: "movie", item: r });
+    }
+    for (const r of trTv.results) {
+      const k = `tv_${r.id}`;
+      if (!watchKeys.has(k)) baseRaw.push({ id: r.id, tmdbType: "tv", item: r });
+    }
+    for (const r of popMovie.results) {
+      const k = `movie_${r.id}`;
+      if (!watchKeys.has(k)) baseRaw.push({ id: r.id, tmdbType: "movie", item: r });
+    }
+    for (const r of popTv.results) {
+      const k = `tv_${r.id}`;
+      if (!watchKeys.has(k)) baseRaw.push({ id: r.id, tmdbType: "tv", item: r });
+    }
+
+    // Seeds (favoriter + watchlist – för taste)
+    const seedsSet: { id: number; type: MediaType }[] = [];
+    if (profile.favoriteMovie?.id) seedsSet.push({ id: profile.favoriteMovie.id, type: "movie" });
+    if (profile.favoriteShow?.id) seedsSet.push({ id: profile.favoriteShow.id, type: "tv" });
+    if (wlRes?.ok) {
+      for (const k of watchKeys) {
+        const [type, idStr] = k.split("_");
+        const id = Number(idStr);
+        if (type === "movie" || type === "tv") seedsSet.push({ id, type });
+      }
+    }
+
+    const seenSeed = new Set<string>();
     const seeds: { id: number; type: MediaType }[] = [];
     for (const s of seedsSet) {
       const k = `${s.type}_${s.id}`;
-      if (seen.has(k)) continue;
-      seen.add(k);
+      if (seenSeed.has(k)) continue;
+      seenSeed.add(k);
       seeds.push(s);
       if (seeds.length >= 25) break;
     }
 
-    // TMDB recommendations
+    // TMDB recommendations (filtrera bort watchlist)
     const recCalls = await Promise.all(
       seeds.slice(0, 6).map((s) =>
         tmdbGet<TMDBPaged<TMDBListItem>>(
@@ -369,7 +385,13 @@ export async function GET(req: Request) {
         ).catch(() => ({ page: 1, results: [] as TMDBListItem[] })),
       ),
     );
-    for (const rc of recCalls) for (const r of rc.results) baseRaw.push({ id: r.id, tmdbType: r.title ? "movie" : "tv", item: r });
+    for (const rc of recCalls) {
+      for (const r of rc.results) {
+        const tmdbType: MediaType = r.title ? "movie" : "tv";
+        const k = `${tmdbType}_${r.id}`;
+        if (!watchKeys.has(k)) baseRaw.push({ id: r.id, tmdbType, item: r });
+      }
+    }
 
     // Dedupe + index
     const uniq = dedupe(baseRaw.map((r) => ({ id: r.id, tmdbType: r.tmdbType })));

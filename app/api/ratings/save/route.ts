@@ -1,19 +1,14 @@
 // app/api/ratings/save/route.ts
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { PrismaClient, Prisma } from "@prisma/client";
+import { PrismaClient } from "@prisma/client";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// Enkel, varningsfri Prisma-singleton
-let prisma: PrismaClient | undefined;
-function getPrisma() {
-  if (!prisma) prisma = new PrismaClient();
-  return prisma;
-}
+const prisma = new PrismaClient();
 
-type Body = {
+type SaveBody = {
   tmdbId: number;
   mediaType: "movie" | "tv";
   rating: number; // 1..10
@@ -22,80 +17,75 @@ type Body = {
 function bad(message: string, status = 400) {
   return NextResponse.json({ ok: false, message }, { status });
 }
-function ok(payload: Record<string, unknown> = {}) {
-  return NextResponse.json({ ok: true, ...payload });
-}
-
-/** Bygg en Prisma-data för update/create med godtyckligt betygsfältsnamn */
-function buildUpdateData(field: "rating" | "score" | "value", rating: number) {
-  return ({ [field]: rating } as unknown) as Prisma.RatingUpdateInput;
-}
-function buildCreateData(
-  field: "rating" | "score" | "value",
-  rating: number,
-  base: { userId: string; tmdbId: number; mediaType: "movie" | "tv" }
-) {
-  return ({ ...base, [field]: rating } as unknown) as Prisma.RatingCreateInput;
-}
 
 export async function POST(req: Request) {
   try {
     const c = await cookies();
     const uid = c.get("nw_uid")?.value;
-    if (!uid) return bad("Ingen session hittades (nw_uid saknas).", 401);
+    if (!uid) return bad("Ingen session (nw_uid saknas).", 401);
 
-    const body = (await req.json()) as Body;
+    const body = (await req.json()) as SaveBody;
     const tmdbId = Number(body.tmdbId);
     const mediaType = body.mediaType;
     const rating = Number(body.rating);
 
-    if (!Number.isFinite(tmdbId) || (mediaType !== "movie" && mediaType !== "tv")) {
-      return bad("Ogiltig payload.");
-    }
-    if (!Number.isFinite(rating) || rating < 1 || rating > 10) {
-      return bad("Betyg måste vara 1–10.");
-    }
+    if (!Number.isFinite(tmdbId) || tmdbId <= 0) return bad("Ogiltigt tmdbId.");
+    if (mediaType !== "movie" && mediaType !== "tv") return bad("Ogiltig mediaType.");
+    if (!Number.isFinite(rating) || rating < 1 || rating > 10) return bad("rating måste vara 1–10.");
 
-    const db = getPrisma();
+    // Säkerställ kolumnen finns (idempotent) – påverkar inte performance märkbart
+    await prisma.$executeRawUnsafe(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name   = 'ratings'
+            AND column_name  = 'rating'
+        ) THEN
+          ALTER TABLE public.ratings
+            ADD COLUMN rating INT CHECK (rating BETWEEN 1 AND 10);
+        END IF;
 
-    // Finns rad redan?
-    const existing = await db.rating.findFirst({
-      where: { userId: uid, tmdbId, mediaType },
-      select: { id: true },
-    });
+        IF NOT EXISTS (
+          SELECT 1
+          FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name   = 'ratings'
+            AND column_name  = 'decided_at'
+        ) THEN
+          ALTER TABLE public.ratings
+            ADD COLUMN decided_at TIMESTAMP NULL;
+        END IF;
 
-    // Vi försöker i ordning: rating -> score -> value
-    const fields: Array<"rating" | "score" | "value"> = ["rating", "score", "value"];
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint
+          WHERE conname = 'ratings_user_tmdb_media_unique'
+        ) THEN
+          ALTER TABLE public.ratings
+          ADD CONSTRAINT ratings_user_tmdb_media_unique UNIQUE (user_id, tmdb_id, media_type);
+        END IF;
+      END$$;
+    `);
 
-    if (existing) {
-      for (const f of fields) {
-        try {
-          await db.rating.update({
-            where: { id: existing.id },
-            data: buildUpdateData(f, rating),
-          });
-          return ok();
-        } catch {
-          // prova nästa fält
-        }
-      }
-      return bad("Prisma-fel: Hittade inget kompatibelt betygsfält.", 500);
-    } else {
-      const base = { userId: uid, tmdbId, mediaType };
-      for (const f of fields) {
-        try {
-          await db.rating.create({
-            data: buildCreateData(f, rating, base),
-          });
-          return ok();
-        } catch {
-          // prova nästa fält
-        }
-      }
-      return bad("Prisma-fel: Hittade inget kompatibelt betygsfält.", 500);
-    }
+    // Upsert via rå SQL för att slippa Prisma-modellens exakta fältnamn just nu.
+    await prisma.$executeRawUnsafe(
+      `
+      INSERT INTO public.ratings (user_id, tmdb_id, media_type, rating, decided_at)
+      VALUES ($1, $2, $3, $4, NOW())
+      ON CONFLICT (user_id, tmdb_id, media_type)
+      DO UPDATE SET rating = EXCLUDED.rating, decided_at = NOW();
+    `,
+      uid,
+      tmdbId,
+      mediaType,
+      rating
+    );
+
+    return NextResponse.json({ ok: true });
   } catch (err) {
-    console.error("ratings/save error", err);
-    return bad("Prisma-fel.", 500);
+    console.error("ratings/save error:", err);
+    return NextResponse.json({ ok: false, message: "Prisma-fel: Hittade inget kompatibelt betygsfält." }, { status: 500 });
   }
 }
