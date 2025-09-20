@@ -39,6 +39,10 @@ model User {
   friendshipsAsUser      Friendship[]    @relation("FriendshipUser")
   friendshipsAsFriend    Friendship[]    @relation("FriendshipFriend")
 
+  // Group invites
+  groupInvitesSent     GroupInvite[] @relation("GroupInvitesFrom")
+  groupInvitesReceived GroupInvite[] @relation("GroupInvitesTo")
+
   verifications Verification[]
 
   @@map("users")
@@ -133,6 +137,7 @@ model Group {
 
   members GroupMember[]
   votes   GroupVote[]   @relation("GroupVotes")
+  invites GroupInvite[]
 
   creator User @relation("UserGroupsCreated", fields: [createdBy], references: [id], onDelete: Cascade)
 
@@ -190,4 +195,20 @@ model Friendship {
 
   @@id([userId, friendId])
   @@map("friendships")
+}
+
+model GroupInvite {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  groupCode   String    @map("group_code")
+  fromUserId  String    @map("from_user_id")
+  toUserId    String    @map("to_user_id")
+  status      String    @default("pending")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  respondedAt DateTime? @map("responded_at")
+
+  group    Group @relation(fields: [groupCode], references: [code], onDelete: Cascade)
+  fromUser User  @relation("GroupInvitesFrom", fields: [fromUserId], references: [id], onDelete: Cascade)
+  toUser   User  @relation("GroupInvitesTo", fields: [toUserId], references: [id], onDelete: Cascade)
+
+  @@map("group_invites")
 }
