@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 
 type MediaType = "movie" | "tv";
 
-/* ---------- TMDB shared types (declared ONCE) ---------- */
+/* ---------- TMDB shared types ---------- */
 type TMDBPaged<T> = { page: number; results: T[] };
 type TMDBListItem = {
   id: number;
@@ -33,7 +33,20 @@ type TMDBDetailsWithAppends = TMDBListItem & {
   keywords?: TMDBKeywords | TMDBKeywordsTV;
   credits?: TMDBCredits;
 };
-/* ------------------------------------------------------- */
+
+type TMDBWatchProviders = {
+  id: number;
+  results: Record<
+    string,
+    {
+      link?: string;
+      flatrate?: { provider_name: string; logo_path: string | null }[];
+      rent?: { provider_name: string; logo_path: string | null }[];
+      buy?: { provider_name: string; logo_path: string | null }[];
+    }
+  >;
+};
+/* -------------------------------------- */
 
 type FavoriteItem = { id: number; title: string; year?: string | number | null; poster?: string | null };
 type ProfileDTO = {
@@ -209,7 +222,7 @@ function genreScore(
   return score;
 }
 
-/* ---------------- Providers helpers (V3) ---------------- */
+/* ---------------- Providers (direkt TMDB) ---------------- */
 
 type Providers = {
   link?: string;
@@ -217,23 +230,43 @@ type Providers = {
   rent?: { provider_name: string; logo_path: string | null }[];
   buy?: { provider_name: string; logo_path: string | null }[];
 };
-type ProvidersResp = { ok: boolean; region?: string; providers: Providers | null };
 
-async function fetchProviders(id: number, type: MediaType): Promise<Providers | null> {
-  const res = await fetch(`/api/tmdb/watch-providers?id=${id}&type=${type}`, { cache: "force-cache" });
-  if (!res.ok) return null;
-  const data = (await res.json()) as ProvidersResp;
-  return data.ok ? data.providers ?? null : null;
+async function fetchProvidersDirect(id: number, type: MediaType, region: string): Promise<Providers | null> {
+  const path = type === "movie" ? `/movie/${id}/watch/providers` : `/tv/${id}/watch/providers`;
+  const data = await tmdbGet<TMDBWatchProviders>(path, {}, "force-cache").catch(() => null);
+  if (!data) return null;
+  const regionData = data.results?.[region];
+  if (regionData) return regionData;
+  // Fallback: EU-lik region eller US om inget annat finns
+  return data.results["US"] ?? null;
 }
 function providerNames(p: Providers | null): string[] {
   const names = new Set<string>();
   if (!p) return [];
   for (const group of ["flatrate", "rent", "buy"] as const) {
-    for (const it of p[group] ?? []) {
-      if (it.provider_name) names.add(it.provider_name);
-    }
+    for (const it of p[group] ?? []) if (it.provider_name) names.add(it.provider_name);
   }
   return Array.from(names);
+}
+
+/* ---------------- Simple mapLimit for concurrency ---------------- */
+
+async function mapLimit<T, U>(
+  arr: T[],
+  limit: number,
+  fn: (t: T) => Promise<U>,
+): Promise<U[]> {
+  const out = new Array<U>(arr.length);
+  let i = 0;
+  const runners = new Array(Math.min(limit, arr.length)).fill(0).map(async () => {
+    for (;;) {
+      const idx = i++;
+      if (idx >= arr.length) break;
+      out[idx] = await fn(arr[idx]);
+    }
+  });
+  await Promise.all(runners);
+  return out;
 }
 
 /* ---------------- Similarity (MMR) ---------------- */
@@ -258,8 +291,9 @@ export async function GET(req: Request) {
     const locale = cookieMap.get("nw_locale") || "sv-SE";
     const groupCode = cookieMap.get("nw_group") || null;
 
-    // Profil
     const cookieHeader = getCookieString(cookieMap);
+
+    // Profil
     const profRes = await fetch(`${new URL(req.url).origin}/api/profile`, {
       headers: { cookie: cookieHeader },
       cache: "no-store",
@@ -349,7 +383,7 @@ export async function GET(req: Request) {
       }
     }
 
-    // V1-score (likedGenres används → ingen lint-varning)
+    // V1-score
     type Scored = { key: string; id: number; type: MediaType; scoreV1: number; base: TMDBListItem };
     const scoredV1: Scored[] = [];
     for (const k of uniq.map((u) => `${u.tmdbType}_${u.id}`)) {
@@ -390,16 +424,12 @@ export async function GET(req: Request) {
       return s;
     }
 
-    // Providers
+    // Providers (direkt TMDB) — begränsa samtidighet
     const providersCache = new Map<string, string[]>();
-    await Promise.all(
-      topKeys.map(async (t) => {
-        const k = `${t.type}:${t.id}`;
-        if (providersCache.has(k)) return;
-        const p = await fetchProviders(t.id, t.type).catch(() => null);
-        providersCache.set(k, providerNames(p));
-      })
-    );
+    await mapLimit(topKeys, 8, async (t) => {
+      const prov = await fetchProvidersDirect(t.id, t.type, region).catch(() => null);
+      providersCache.set(`${t.type}:${t.id}`, providerNames(prov));
+    });
 
     // Gruppmedlemmar providers
     let groupProviders: string[][] = [];
