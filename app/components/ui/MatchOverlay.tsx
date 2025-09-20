@@ -1,43 +1,98 @@
+// app/components/ui/MatchOverlay.tsx
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import Image from "next/image";
 
 type VibratingNavigator = Navigator & {
   vibrate?: (pattern: number | number[]) => boolean;
 };
 
 type MatchPayload = { tmdbId: number; mediaType: "movie" | "tv" };
+
+type MatchResponseOk = {
+  ok: true;
+  match: MatchPayload | null;
+  matches?: MatchPayload[];
+};
+
+type MatchResponseErr = { ok: false; error: string };
+
 type Details = {
   id: number;
-  type: "movie" | "tv";
+  mediaType: "movie" | "tv";
   title: string;
-  year?: number | null;
-  rating?: number | null;
-  poster?: string | null;
+  year: string | null;
+  voteAverage: number | null;
+  posterUrl: string | null;
+  blurDataURL?: string | null;
   overview?: string | null;
 };
 
-export default function MatchOverlay({ code }: { code: string }) {
+function readGroupFromCookie(): string | null {
+  if (typeof document === "undefined") return null;
+  const m = document.cookie.match(/(?:^|;\s*)nw_group=([^;]+)/);
+  return m ? decodeURIComponent(m[1]).toUpperCase() : null;
+}
+
+export default function MatchOverlay({ code }: { code?: string }) {
   const [open, setOpen] = useState(false);
   const [details, setDetails] = useState<Details | null>(null);
 
+  const effectiveCode = useMemo(
+    () => (code && code.trim() ? code.toUpperCase() : readGroupFromCookie()),
+    [code],
+  );
+
   useEffect(() => {
+    if (!effectiveCode) return;
+
     let t: NodeJS.Timeout | null = null;
+
     const poll = async () => {
-      const res = await fetch(`/api/group/match?code=${encodeURIComponent(code)}`, { cache: "no-store" });
-      const data = await res.json().catch(() => null);
-      const m: MatchPayload | null = data?.ok && data?.match ? data.match : null;
-      if (m) {
-        const dres = await fetch(`/api/tmdb/details?type=${m.mediaType}&id=${m.tmdbId}`);
-        const d = await dres.json().catch(() => null);
-        if (d?.ok) {
+      try {
+        const res = await fetch(`/api/group/match?code=${encodeURIComponent(effectiveCode)}`, {
+          cache: "no-store",
+        });
+        if (!res.ok) return;
+
+        const data = (await res.json()) as MatchResponseOk | MatchResponseErr;
+
+        let first: MatchPayload | null = null;
+        if ("ok" in data && data.ok) {
+          first = data.match ?? (Array.isArray(data.matches) ? data.matches[0] ?? null : null);
+        }
+        if (!first) return;
+
+        const dres = await fetch(
+          `/api/tmdb/details?type=${first.mediaType}&id=${first.tmdbId}`,
+          { cache: "no-store" },
+        );
+        if (!dres.ok) return;
+
+        const d = (await dres.json()) as
+          | {
+              ok: true;
+              id: number;
+              mediaType: "movie" | "tv";
+              title: string;
+              overview?: string;
+              posterUrl: string | null;
+              blurDataURL?: string | null;
+              year: string | null;
+              voteAverage: number | null;
+            }
+          | { ok: false; error: string };
+
+        if ("ok" in d && d.ok) {
           const payload: Details = {
             id: d.id,
-            type: d.type,
+            mediaType: d.mediaType,
             title: d.title,
             year: d.year ?? null,
-            rating: d.rating ?? null,
-            poster: d.poster ?? null,
+            voteAverage: d.voteAverage ?? null,
+            posterUrl: d.posterUrl ?? null,
+            blurDataURL: d.blurDataURL ?? null,
             overview: d.overview ?? null,
           };
           setDetails(payload);
@@ -46,15 +101,20 @@ export default function MatchOverlay({ code }: { code: string }) {
             (navigator as VibratingNavigator).vibrate?.(80);
           }
         }
+      } catch {
+        // svälj nätverksfel – nytt försök vid nästa poll
       }
     };
-    poll();
+
+    void poll();
     t = setInterval(poll, 8000);
+
     return () => {
       if (t) clearInterval(t);
     };
-  }, [code]);
+  }, [effectiveCode]);
 
+  if (!effectiveCode) return null;
   if (!open || !details) return null;
 
   return (
@@ -63,15 +123,26 @@ export default function MatchOverlay({ code }: { code: string }) {
         className="max-w-md overflow-hidden rounded-2xl border border-neutral-700 bg-neutral-900 text-neutral-100 shadow-xl"
         onClick={(e) => e.stopPropagation()}
       >
-        {details.poster && <img src={details.poster} alt={details.title} className="h-auto w-full" />}
+        {details.posterUrl && (
+          <Image
+            src={details.posterUrl}
+            alt={details.title}
+            width={800}
+            height={1200}
+            placeholder={details.blurDataURL ? "blur" : "empty"}
+            blurDataURL={details.blurDataURL ?? undefined}
+            className="h-auto w-full"
+            priority={false}
+          />
+        )}
         <div className="space-y-2 p-4">
           <div className="text-lg font-semibold">🎉 Match!</div>
           <div className="text-base">
             {details.title}
             {details.year ? ` (${details.year})` : ""}
           </div>
-          {typeof details.rating === "number" && (
-            <div className="text-sm text-neutral-400">★ {details.rating.toFixed(1)}</div>
+          {typeof details.voteAverage === "number" && (
+            <div className="text-sm text-neutral-400">★ {details.voteAverage.toFixed(1)}</div>
           )}
           {details.overview && <p className="text-sm text-neutral-300">{details.overview}</p>}
           <button
