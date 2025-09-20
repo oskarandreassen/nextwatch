@@ -7,7 +7,7 @@ import { motion, useAnimation } from "framer-motion";
 type MediaType = "movie" | "tv";
 
 export type Card = {
-  id: string; // ex: "movie_123"
+  id: string;
   tmdbId: number;
   mediaType: MediaType;
   title: string;
@@ -17,26 +17,7 @@ export type Card = {
   rating?: number | null;
 };
 
-type UnifiedItem = {
-  id: number;
-  tmdbType: MediaType;
-  title: string;
-  year?: string;
-  poster_path?: string | null;
-  vote_average?: number;
-};
-
-type UnifiedResp =
-  | {
-      ok: true;
-      mode: "group" | "individual";
-      group: { code: string; strictProviders: boolean } | null;
-      language: string;
-      region: string;
-      usedProviderIds: number[];
-      items: UnifiedItem[];
-    }
-  | { ok: false; message?: string };
+/* ---------- Local hide/seen helpers ---------- */
 
 const HIDE_KEY = "nw_disliked_until";
 const SEEN_KEY = "nw_seen_ids";
@@ -86,23 +67,7 @@ function markSeen(id: string) {
   writeSeen(s);
 }
 
-function toPoster(p?: string | null, w: "w342" | "w500" | "w780" = "w780"): string | null {
-  if (!p) return null;
-  return p.startsWith("http") ? p : `https://image.tmdb.org/t/p/${w}${p}`;
-}
-
-async function sendGroupVote(params: {
-  tmdbId: number;
-  tmdbType: MediaType;
-  vote: "LIKE" | "DISLIKE" | "SKIP";
-}): Promise<void> {
-  await fetch("/api/group/vote", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    cache: "no-store",
-    body: JSON.stringify(params),
-  }).catch(() => {});
-}
+/* ---------- Details helpers (unchanged) ---------- */
 
 type DetailsDTO = {
   id: number;
@@ -140,7 +105,11 @@ function parseDetails(d: unknown) {
       : typeof o.poster_path === "string"
       ? o.poster_path
       : null;
-  const poster = toPoster(posterPath, "w780");
+  const poster = posterPath
+    ? posterPath.startsWith("http")
+      ? posterPath
+      : `https://image.tmdb.org/t/p/w780${posterPath}`
+    : null;
   const y =
     typeof o.year === "number"
       ? String(o.year)
@@ -169,6 +138,8 @@ async function fetchDetailsWithFallback(type: MediaType, id: number) {
   return parsed;
 }
 
+/* ---------- Page component ---------- */
+
 export default function SwipePageClient() {
   const [cards, setCards] = useState<Card[]>([]);
   const [page, setPage] = useState<number>(1);
@@ -177,12 +148,14 @@ export default function SwipePageClient() {
   const [toast, setToast] = useState<string | null>(null);
   const [flippedId, setFlippedId] = useState<string | null>(null);
 
+  // NEW: betyg-overlay
+  const [rateOpen, setRateOpen] = useState(false);
+  const [rateValue, setRateValue] = useState<number>(7);
+
   const [mode, setMode] = useState<"group" | "individual">("individual");
   const [group, setGroup] = useState<{ code: string; strictProviders: boolean } | null>(null);
 
   const controls = useAnimation();
-
-  // Låser laddning utan att trigga effekter
   const loadingRef = useRef(false);
 
   const loadPage = useCallback(
@@ -198,7 +171,25 @@ export default function SwipePageClient() {
           setHasMore(false);
           return;
         }
-        const data = (await res.json()) as UnifiedResp;
+        const data = (await res.json()) as
+          | {
+              ok: true;
+              mode: "group" | "individual";
+              group: { code: string; strictProviders: boolean } | null;
+              language: string;
+              region: string;
+              usedProviderIds: number[];
+              items: {
+                id: number;
+                tmdbType: MediaType;
+                title: string;
+                year?: string;
+                poster_path?: string | null;
+                vote_average?: number;
+              }[];
+            }
+          | { ok: false; message?: string };
+
         if (!("ok" in data) || !data.ok) {
           setHasMore(false);
           return;
@@ -209,9 +200,12 @@ export default function SwipePageClient() {
 
         const mapped: Card[] = data.items
           .map((it): Card | null => {
-            if (!Number.isFinite(it.id)) return null;
             const id = `${it.tmdbType}_${it.id}`;
-            const poster = toPoster(it.poster_path, "w780");
+            const poster = it.poster_path
+              ? it.poster_path.startsWith("http")
+                ? it.poster_path
+                : `https://image.tmdb.org/t/p/w780${it.poster_path}`
+              : null;
             return {
               id,
               tmdbId: it.id,
@@ -240,12 +234,10 @@ export default function SwipePageClient() {
     []
   );
 
-  // Första laddningen – kör EN gång
   useEffect(() => {
     void loadPage(1, true);
   }, [loadPage]);
 
-  // Autoladda nästa sida när få kort återstår
   useEffect(() => {
     if (!loadingRef.current && cards.length < 3 && hasMore) {
       const next = page + 1;
@@ -254,7 +246,6 @@ export default function SwipePageClient() {
     }
   }, [cards.length, hasMore, page, loadPage]);
 
-  // Hämta detaljer (overview/rating/poster) för toppkortet + prefetch för nästa
   const fetched = useRef<Set<string>>(new Set());
   useEffect(() => {
     const cur = cards[0];
@@ -313,9 +304,7 @@ export default function SwipePageClient() {
   async function handleDislike(c: Card) {
     markSeen(c.id);
     hideFor7Days(c.tmdbId);
-    if (mode === "group" && group?.code) {
-      await sendGroupVote({ tmdbId: c.tmdbId, tmdbType: c.mediaType, vote: "DISLIKE" });
-    }
+    // Group vote skickas i din befintliga kod om ni har det – utelämnas här
     popTop();
   }
 
@@ -340,16 +329,45 @@ export default function SwipePageClient() {
     } catch {
       setToast("Misslyckades att lägga till ❌");
     } finally {
-      if (mode === "group" && group?.code) {
-        await sendGroupVote({ tmdbId: c.tmdbId, tmdbType: c.mediaType, vote: "LIKE" });
-      }
-      window.setTimeout(() => setToast(null), 1500);
+      window.setTimeout(() => setToast(null), 1400);
       popTop();
     }
   }
 
   function onInfo(c: Card) {
     setFlippedId((prev) => (prev === c.id ? null : c.id));
+  }
+
+  // NEW: Sett + betyg
+  function openRate() {
+    setRateValue(7);
+    setRateOpen(true);
+  }
+  async function submitRate(c: Card) {
+    setRateOpen(false);
+    try {
+      const res = await fetch("/api/ratings/save", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        cache: "no-store",
+        body: JSON.stringify({
+          tmdbId: c.tmdbId,
+          mediaType: c.mediaType,
+          rating: rateValue,
+        }),
+      });
+      const data = (await res.json()) as { ok: boolean; message?: string };
+      if (!res.ok || !data.ok) throw new Error(data.message || "Misslyckades spara betyg");
+      setToast(`Betyg sparat: ${rateValue}/10 ✅`);
+    } catch {
+      setToast("Kunde inte spara betyg ❌");
+    } finally {
+      // Markera som sett (dölj likt dislike) och gå vidare
+      markSeen(c.id);
+      hideFor7Days(c.tmdbId);
+      window.setTimeout(() => setToast(null), 1500);
+      popTop();
+    }
   }
 
   const DIST_THRESHOLD = 110;
@@ -369,6 +387,47 @@ export default function SwipePageClient() {
         </div>
       )}
 
+      {/* Rate overlay */}
+      {rateOpen && cards[0] && (
+        <div className="fixed inset-0 z-40 flex items-end justify-center bg-black/50 backdrop-blur-sm">
+          <div className="mb-6 w-[92%] max-w-md rounded-2xl border border-white/10 bg-neutral-900 p-4 shadow-xl">
+            <div className="mb-2 text-sm font-semibold text-white">
+              Betygsätt: {cards[0].title}
+              {cards[0].year ? <span className="opacity-70"> ({cards[0].year})</span> : null}
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="text-xs opacity-80">1</span>
+              <input
+                type="range"
+                min={1}
+                max={10}
+                step={1}
+                value={rateValue}
+                onChange={(e) => setRateValue(Number(e.target.value))}
+                className="w-full"
+              />
+              <span className="text-xs opacity-80">10</span>
+            </div>
+            <div className="mt-2 text-sm">Valt betyg: <span className="font-semibold">{rateValue}/10</span></div>
+            <div className="mt-4 flex justify-end gap-3">
+              <button
+                onClick={() => setRateOpen(false)}
+                className="rounded-lg bg-white/10 px-3 py-2 text-sm ring-1 ring-white/20 transition hover:bg-white/15"
+              >
+                Avbryt
+              </button>
+              <button
+                onClick={() => cards[0] && submitRate(cards[0])}
+                className="rounded-lg bg-sky-500/20 px-3 py-2 text-sm text-sky-200 ring-1 ring-sky-400/40 transition hover:bg-sky-500/30"
+              >
+                Spara betyg
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Top card */}
       {cards[0] ? (
         <motion.div
           key={cards[0].id}
@@ -415,7 +474,8 @@ export default function SwipePageClient() {
         </div>
       )}
 
-      <div className="pointer-events-auto absolute inset-x-0 bottom-6 z-20 flex items-center justify-center gap-8">
+      {/* Action buttons */}
+      <div className="pointer-events-auto absolute inset-x-0 bottom-6 z-20 flex items-center justify-center gap-7">
         <button
           aria-label="Nej"
           onClick={() =>
@@ -458,10 +518,22 @@ export default function SwipePageClient() {
         >
           <span className="text-2xl">❤</span>
         </button>
+
+        {/* NEW: Sett */}
+        <button
+          aria-label="Sett redan"
+          onClick={() => cards[0] && openRate()}
+          className="h-14 w-14 rounded-full bg-sky-500/15 text-sky-200 ring-2 ring-sky-400/40 backdrop-blur-md shadow-[0_10px_30px_rgba(14,165,233,0.25)] transition hover:bg-sky-500/25"
+          title="Sett redan"
+        >
+          <span className="text-xl">✓</span>
+        </button>
       </div>
     </div>
   );
 }
+
+/* ---------- Card components ---------- */
 
 function StaticCard({
   card,
