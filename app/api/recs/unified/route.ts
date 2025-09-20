@@ -318,6 +318,9 @@ export async function GET(req: Request) {
       tmdbGet<TMDBPaged<TMDBListItem>>("/tv/popular", { language: locale, region, page: pageNum }, "force-cache"),
     ]);
 
+
+    
+
     // Läs watchlist för att filtrera bort dubbletter i swipen
     const watchKeys = new Set<string>();
     const wlRes = await fetch(`${new URL(req.url).origin}/api/watchlist/list`, {
