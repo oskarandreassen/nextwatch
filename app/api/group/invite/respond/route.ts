@@ -15,6 +15,19 @@ async function cleanup(): Promise<void> {
   });
 }
 
+function withGroupCookie(payload: Ok, groupCode: string): NextResponse<Ok> {
+  const res = NextResponse.json(payload);
+  // Sätt aktiv grupp i cookie så serverkomponenter ser den direkt
+  // (secure + lax; välj maxAge som passar din app – här 30 dagar)
+  res.cookies.set("nw_group", groupCode, {
+    path: "/",
+    sameSite: "lax",
+    secure: true,
+    maxAge: 60 * 60 * 24 * 30,
+  });
+  return res;
+}
+
 export async function POST(req: NextRequest): Promise<NextResponse<Ok | Err>> {
   const jar = await cookies();
   const uid = jar.get("nw_uid")?.value ?? "";
@@ -44,24 +57,27 @@ export async function POST(req: NextRequest): Promise<NextResponse<Ok | Err>> {
     if (invite.toUserId !== uid) {
       return NextResponse.json({ ok: false, message: "Invite does not belong to you." }, { status: 403 });
     }
+
+    // Redan hanterad?
     if (invite.status !== "pending") {
-      // inte pending längre – behandla som redan hanterad
       if (action === "accept") {
-        // säkra medlemskap ändå
         await prisma.groupMember.upsert({
           where: { groupCode_userId: { groupCode: invite.groupCode, userId: uid } },
           create: { groupCode: invite.groupCode, userId: uid },
           update: {},
         });
-        return NextResponse.json({ ok: true, joined: invite.groupCode });
+        return withGroupCookie({ ok: true, joined: invite.groupCode }, invite.groupCode);
       }
       return NextResponse.json({ ok: true, declined: true });
     }
+
+    // TTL?
     if (invite.expiresAt && invite.expiresAt < new Date()) {
       await prisma.groupInvite.delete({ where: { id: invite.id } });
       return NextResponse.json({ ok: false, message: "Invite expired." }, { status: 410 });
     }
 
+    // Grupp måste finnas
     const group = await prisma.group.findUnique({ where: { code: invite.groupCode } });
     if (!group) {
       await prisma.groupInvite.delete({ where: { id: invite.id } });
@@ -75,35 +91,28 @@ export async function POST(req: NextRequest): Promise<NextResponse<Ok | Err>> {
           data: { status: "declined", respondedAt: new Date() },
         });
       } catch {
-        // ignoreras – kan vara P2002 från tidigare declined
+        /* ignore P2002 etc. */
       }
       return NextResponse.json({ ok: true, declined: true });
     }
 
     // ACCEPT
-    // 1) säkra medlemskap
     await prisma.groupMember.upsert({
       where: { groupCode_userId: { groupCode: invite.groupCode, userId: uid } },
       create: { groupCode: invite.groupCode, userId: uid },
       update: {},
     });
 
-    // 2) markera invite accepterad – om P2002 pga gammal accepted, fortsätt ändå
     try {
       await prisma.groupInvite.update({
         where: { id: invite.id },
         data: { status: "accepted", respondedAt: new Date() },
       });
     } catch (e) {
-      const code = (e as { code?: string } | null)?.code;
-      if (code !== "P2002") {
-        // okänt fel – men försök ändå returnera joined
-        console.error("invite respond update failed", e);
-      }
-      // Vid P2002: ignorerar – vi har redan lagt in membership
+      // Om unik-krock (t.ex. gammal accepted): ignorera – medlemskap redan klart.
     }
 
-    return NextResponse.json({ ok: true, joined: invite.groupCode });
+    return withGroupCookie({ ok: true, joined: invite.groupCode }, invite.groupCode);
   } catch (e) {
     console.error("invite respond failed", e);
     return NextResponse.json({ ok: false, message: "Internal error." }, { status: 500 });
