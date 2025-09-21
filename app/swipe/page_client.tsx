@@ -4,6 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import { motion, useAnimation } from "framer-motion";
 
+/* ---------- types ---------- */
+
 type MediaType = "movie" | "tv";
 
 export type Card = {
@@ -16,6 +18,35 @@ export type Card = {
   overview?: string | null;
   rating?: number | null;
 };
+
+type UnifiedOk = {
+  ok: true;
+  mode: "group" | "individual";
+  group: { code: string; strictProviders: boolean } | null;
+  language: string;
+  region: string;
+  usedProviderIds: number[];
+  items: {
+    id: number;
+    tmdbType: MediaType;
+    title: string;
+    year?: string;
+    poster_path?: string | null;
+    vote_average?: number;
+  }[];
+};
+type UnifiedResp = UnifiedOk | { ok: false; message?: string };
+
+type MatchResp =
+  | {
+      ok: true;
+      size: number; // antal medlemmar i aktiv grupp
+      need: number; // tröskel för match
+      count: number; // hur många som har röstat LIKE på aktuell titel (om frågan gällde en specifik)
+      match: { tmdbId: number; tmdbType: MediaType } | null; // senaste färska matchen om någon
+      matches: { tmdbId: number; tmdbType: MediaType }[];
+    }
+  | { ok: false; message?: string };
 
 /* ---------- Local hide/seen helpers ---------- */
 
@@ -67,7 +98,7 @@ function markSeen(id: string) {
   writeSeen(s);
 }
 
-/* ---------- Details helpers (unchanged) ---------- */
+/* ---------- Details helpers (fallback sv → en) ---------- */
 
 type DetailsDTO = {
   id: number;
@@ -138,19 +169,13 @@ async function fetchDetailsWithFallback(type: MediaType, id: number) {
   return parsed;
 }
 
-/* ---------- Page component ---------- */
+/* ---------- component ---------- */
 
 export default function SwipePageClient() {
   const [cards, setCards] = useState<Card[]>([]);
   const [page, setPage] = useState<number>(1);
   const [hasMore, setHasMore] = useState<boolean>(true);
-  const [loadingUi, setLoadingUi] = useState(false);
-  const [toast, setToast] = useState<string | null>(null);
   const [flippedId, setFlippedId] = useState<string | null>(null);
-
-  // NEW: betyg-overlay
-  const [rateOpen, setRateOpen] = useState(false);
-  const [rateValue, setRateValue] = useState<number>(7);
 
   const [mode, setMode] = useState<"group" | "individual">("individual");
   const [group, setGroup] = useState<{ code: string; strictProviders: boolean } | null>(null);
@@ -162,34 +187,11 @@ export default function SwipePageClient() {
     async (targetPage: number, replace: boolean) => {
       if (loadingRef.current) return;
       loadingRef.current = true;
-      setLoadingUi(true);
       try {
         const res = await fetch(`/api/recs/unified?page=${targetPage}`, {
           cache: "no-store",
         });
-        if (!res.ok) {
-          setHasMore(false);
-          return;
-        }
-        const data = (await res.json()) as
-          | {
-              ok: true;
-              mode: "group" | "individual";
-              group: { code: string; strictProviders: boolean } | null;
-              language: string;
-              region: string;
-              usedProviderIds: number[];
-              items: {
-                id: number;
-                tmdbType: MediaType;
-                title: string;
-                year?: string;
-                poster_path?: string | null;
-                vote_average?: number;
-              }[];
-            }
-          | { ok: false; message?: string };
-
+        const data = (await res.json()) as UnifiedResp;
         if (!("ok" in data) || !data.ok) {
           setHasMore(false);
           return;
@@ -228,7 +230,6 @@ export default function SwipePageClient() {
         setHasMore(mapped.length > 0);
       } finally {
         loadingRef.current = false;
-        setLoadingUi(false);
       }
     },
     []
@@ -246,6 +247,7 @@ export default function SwipePageClient() {
     }
   }, [cards.length, hasMore, page, loadPage]);
 
+  // lazy hydrering av details på topp- och nästa-kortet
   const fetched = useRef<Set<string>>(new Set());
   useEffect(() => {
     const cur = cards[0];
@@ -301,16 +303,59 @@ export default function SwipePageClient() {
     setCards((prev) => prev.slice(1));
   }
 
+  /* ---------- group helpers ---------- */
+
+  async function sendGroupVote(c: Card, vote: "LIKE" | "DISLIKE") {
+    if (mode !== "group" || !group?.code) return;
+    try {
+      await fetch("/api/group/vote", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        cache: "no-store",
+        body: JSON.stringify({
+          groupCode: group.code,
+          tmdbId: c.tmdbId,
+          tmdbType: c.mediaType,
+          vote,
+        }),
+      });
+      // efter röst: poll match-endpoint och emit event om match finns
+      const m = await fetch(`/api/group/match?code=${group.code}`, {
+        cache: "no-store",
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null);
+      const parsed = m as MatchResp | null;
+      if (parsed && "ok" in parsed && parsed.ok && parsed.match) {
+        // låt din befintliga overlay lyssna på detta
+        window.dispatchEvent(
+          new CustomEvent("nw:group-match", {
+            detail: {
+              code: group.code,
+              tmdbId: parsed.match.tmdbId,
+              tmdbType: parsed.match.tmdbType,
+            },
+          })
+        );
+      }
+    } catch {
+      // swallow – gruppröst är best-effort; UI lämnas oförändrat
+    }
+  }
+
+  /* ---------- actions ---------- */
+
   async function handleDislike(c: Card) {
     markSeen(c.id);
     hideFor7Days(c.tmdbId);
-    // Group vote skickas i din befintliga kod om ni har det – utelämnas här
+    await sendGroupVote(c, "DISLIKE");
     popTop();
   }
 
   async function handleLike(c: Card) {
     markSeen(c.id);
     try {
+      // enskild watchlist (bevarar existerande beteende)
       const res = await fetch("/api/watchlist/like", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -323,13 +368,12 @@ export default function SwipePageClient() {
           poster: c.poster,
         }),
       });
-      const data = (await res.json()) as { ok: boolean; message?: string };
-      if (!res.ok || !data.ok) throw new Error(data.message || "Kunde inte lägga till i watchlist");
-      setToast("Tillagd i Watchlist ✅");
-    } catch {
-      setToast("Misslyckades att lägga till ❌");
+      // oavsett om watchlist lyckas ska grupp-rösten skickas om läge=group
+      await sendGroupVote(c, "LIKE");
+      if (!res.ok) {
+        // fortsätt ändå – vi har redan markerat kortet som sett
+      }
     } finally {
-      window.setTimeout(() => setToast(null), 1400);
       popTop();
     }
   }
@@ -338,37 +382,7 @@ export default function SwipePageClient() {
     setFlippedId((prev) => (prev === c.id ? null : c.id));
   }
 
-  // NEW: Sett + betyg
-  function openRate() {
-    setRateValue(7);
-    setRateOpen(true);
-  }
-  async function submitRate(c: Card) {
-    setRateOpen(false);
-    try {
-      const res = await fetch("/api/ratings/save", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        cache: "no-store",
-        body: JSON.stringify({
-          tmdbId: c.tmdbId,
-          mediaType: c.mediaType,
-          rating: rateValue,
-        }),
-      });
-      const data = (await res.json()) as { ok: boolean; message?: string };
-      if (!res.ok || !data.ok) throw new Error(data.message || "Misslyckades spara betyg");
-      setToast(`Betyg sparat: ${rateValue}/10 ✅`);
-    } catch {
-      setToast("Kunde inte spara betyg ❌");
-    } finally {
-      // Markera som sett (dölj likt dislike) och gå vidare
-      markSeen(c.id);
-      hideFor7Days(c.tmdbId);
-      window.setTimeout(() => setToast(null), 1500);
-      popTop();
-    }
-  }
+  /* ---------- render ---------- */
 
   const DIST_THRESHOLD = 110;
   const VELOCITY_THRESHOLD = 700;
@@ -380,63 +394,6 @@ export default function SwipePageClient() {
           Swiping as: <span className="font-mono tracking-wider">{group.code}</span>
         </div>
       )}
-
-      {toast && (
-        <div className="fixed bottom-36 left-1/2 -translate-x-1/2 rounded-xl bg-black/85 px-4 py-2 text-sm text-white shadow">
-          {toast}
-        </div>
-      )}
-
-      {/* Rate overlay */}
-      {rateOpen && cards[0] && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          className="fixed inset-0 z-[80] flex items-end justify-center bg-black/50 backdrop-blur-sm"
-        >
-          <div className="w-[92%] max-w-md rounded-2xl border border-white/10 bg-neutral-900 p-4 shadow-xl
-                          mb-[calc(env(safe-area-inset-bottom)+64px)]">
-            <div className="mb-2 text-sm font-semibold text-white">
-              Betygsätt: {cards[0].title}
-              {cards[0].year ? <span className="opacity-70"> ({cards[0].year})</span> : null}
-            </div>
-
-            <div className="flex items-center gap-3">
-              <span className="text-xs opacity-80">1</span>
-              <input
-                type="range"
-                min={1}
-                max={10}
-                step={1}
-                value={rateValue}
-                onChange={(e) => setRateValue(Number(e.target.value))}
-                className="w-full"
-              />
-              <span className="text-xs opacity-80">10</span>
-            </div>
-
-            <div className="mt-2 text-sm">
-              Valt betyg: <span className="font-semibold">{rateValue}/10</span>
-            </div>
-
-            <div className="mt-4 flex justify-end gap-3">
-              <button
-                onClick={() => setRateOpen(false)}
-                className="rounded-lg bg-white/10 px-3 py-2 text-sm ring-1 ring-white/20 transition hover:bg-white/15"
-              >
-                Avbryt
-              </button>
-              <button
-                onClick={() => cards[0] && submitRate(cards[0])}
-                className="rounded-lg bg-sky-500/20 px-3 py-2 text-sm text-sky-200 ring-1 ring-sky-400/40 transition hover:bg-sky-500/30"
-              >
-                Spara betyg
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
 
       {/* Top card */}
       {cards[0] ? (
@@ -470,7 +427,11 @@ export default function SwipePageClient() {
                 });
               return;
             }
-            void controls.start({ x: 0, rotate: 0, transition: { type: "spring", stiffness: 320, damping: 28 } });
+            void controls.start({
+              x: 0,
+              rotate: 0,
+              transition: { type: "spring", stiffness: 320, damping: 28 },
+            });
           }}
         >
           <StaticCard
@@ -481,11 +442,11 @@ export default function SwipePageClient() {
         </motion.div>
       ) : (
         <div className="absolute inset-0 flex items-center justify-center opacity-70">
-          {loadingUi ? "Laddar..." : "Slut på förslag nu."}
+          Slut på förslag nu.
         </div>
       )}
 
-      {/* Action buttons */}
+      {/* Action buttons – bevarad placering & storlek */}
       <div className="pointer-events-auto absolute inset-x-0 bottom-6 z-20 flex items-center justify-center gap-7">
         <button
           aria-label="Nej"
@@ -530,10 +491,21 @@ export default function SwipePageClient() {
           <span className="text-2xl">❤</span>
         </button>
 
-        {/* NEW: Sett */}
+        {/* ✓-knappen behåller vi – markerar kortet som sett och döljer likt dislike */}
         <button
           aria-label="Sett redan"
-          onClick={() => cards[0] && openRate()}
+          onClick={() =>
+            cards[0] &&
+            (async () => {
+              const c = cards[0];
+              await controls.start({ x: 520, rotate: 0, opacity: 0, transition: { duration: 0.18 } });
+              markSeen(c.id);
+              hideFor7Days(c.tmdbId);
+              await sendGroupVote(c, "DISLIKE"); // räknas som ej intresserad i gruppen
+              popTop();
+              await controls.start({ x: 0, rotate: 0, opacity: 1 });
+            })()
+          }
           className="h-14 w-14 rounded-full bg-sky-500/15 text-sky-200 ring-2 ring-sky-400/40 backdrop-blur-md shadow-[0_10px_30px_rgba(14,165,233,0.25)] transition hover:bg-sky-500/25"
           title="Sett redan"
         >
@@ -544,7 +516,7 @@ export default function SwipePageClient() {
   );
 }
 
-/* ---------- Card components ---------- */
+/* ---------- Card components (oförändrat utseende) ---------- */
 
 function StaticCard({
   card,
