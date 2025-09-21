@@ -1,11 +1,19 @@
 "use client";
 
-import { useEffect } from "react";
-import MatchOverlay from "../ui/MatchOverlay";
+import { useEffect, useRef } from "react";
+import MatchOverlay, { type GroupMatchItem } from "../ui/MatchOverlay";
 import { useGroupMatchPolling } from "../../../lib/useGroupMatch";
 
 export default function OverlayMount() {
   const { open, item, dismiss, notifyVoted } = useGroupMatchPolling();
+
+  // Sticky-minne: om vi får ett item när overlayn inte hunnit mounta,
+  // behåll det så att vi kan visa direkt när allt är redo.
+  const lastItemRef = useRef<GroupMatchItem | null>(null);
+  if (open && item) {
+    lastItemRef.current = item;
+  }
+  const shownItem = item ?? lastItemRef.current;
 
   // Intercepta fetch → när /api/group/vote (POST) lyckas, trigga extra poll
   useEffect(() => {
@@ -43,5 +51,5 @@ export default function OverlayMount() {
     };
   }, [notifyVoted]);
 
-  return <MatchOverlay open={open} item={item} onClose={dismiss} />;
+  return <MatchOverlay open={open} item={shownItem} onClose={dismiss} />;
 }

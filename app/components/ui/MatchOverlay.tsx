@@ -2,6 +2,7 @@
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import Image from "next/image";
 
 export type ProviderLink = { name: string; url: string };
@@ -30,7 +31,6 @@ function normalizePoster(src?: string): string | undefined {
 }
 
 export default function MatchOverlay({ open, item, onClose, code }: Props) {
-  // Hooks alltid i toppen
   const [flipped, setFlipped] = useState(false);
 
   const posterSrc = useMemo(() => normalizePoster(item?.poster), [item?.poster]);
@@ -47,7 +47,6 @@ export default function MatchOverlay({ open, item, onClose, code }: Props) {
   const ackAndClose = useCallback(async () => {
     try {
       if (item) {
-        // Kvittera så /match inte returnerar samma direkt igen
         await fetch("/api/group/match/ack", {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -59,7 +58,7 @@ export default function MatchOverlay({ open, item, onClose, code }: Props) {
         });
       }
     } catch {
-      // svälj – det är inte kritiskt för användaren
+      // tyst
     } finally {
       setFlipped(false);
       onClose();
@@ -68,7 +67,8 @@ export default function MatchOverlay({ open, item, onClose, code }: Props) {
 
   if (!open || !item) return null;
 
-  return (
+  // Rendera via portal till <body> för att undvika stacking/overflow-problem
+  return createPortal(
     <div
       aria-modal
       role="dialog"
@@ -79,7 +79,6 @@ export default function MatchOverlay({ open, item, onClose, code }: Props) {
 
       <div
         className="relative mx-4 w-full max-w-sm"
-        // Undvik att krocka med mobilen nav-bar i botten
         style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 16px)" }}
       >
         <div className="mb-2 text-center text-sm font-semibold text-white">
@@ -181,6 +180,7 @@ export default function MatchOverlay({ open, item, onClose, code }: Props) {
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
