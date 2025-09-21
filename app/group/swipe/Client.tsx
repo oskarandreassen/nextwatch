@@ -4,7 +4,9 @@
 import { useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
 import GroupBar from "./GroupBar";
-import MatchOverlay from "../../components/ui/MatchOverlay";
+//import MatchOverlay from "../../components/ui/MatchOverlay";
+import OverlayMount from "../../components/client/OverlayMount";
+
 
 // Din befintliga swipelogik flyttad till _legacy (eller redan där)
 const LegacyGroupSwipe = dynamic(() => import("./_legacy"), { ssr: false });
@@ -17,7 +19,8 @@ export default function Client() {
     <>
       <GroupBar code={code} />
       <LegacyGroupSwipe />
-      <MatchOverlay code={code} />
+      
+      <OverlayMount />
     </>
   );
 }
