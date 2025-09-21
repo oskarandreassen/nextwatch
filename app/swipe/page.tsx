@@ -1,19 +1,16 @@
 import { cookies } from "next/headers";
-import MatchOverlayMount from "./MatchOverlayMount";
 import Client from "./page_client";
-
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
+import OverlayMount from "../components/client/OverlayMount";
 
 export default async function Page() {
-  // Regler: alltid await cookies() i App Router serverkomponent
+  // Regler: alltid await cookies() i App Router (server-komponent)
   await cookies();
 
   return (
     <>
       <Client />
-      {/* Monterar overlay globalt i swipe-sidan */}
-      <MatchOverlayMount />
+      {/* Monterar match-overlay globalt i swipe-sidan */}
+      <OverlayMount />
     </>
   );
 }
