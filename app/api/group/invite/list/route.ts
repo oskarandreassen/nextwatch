@@ -1,71 +1,77 @@
 // app/api/group/invite/list/route.ts
-import { NextRequest, NextResponse } from "next/server";
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import prisma from "@/lib/prisma";
 
-type InviteItem = {
-  id: string;
-  groupCode: string;
-  status: string;
-  createdAt: string;
-  from?: { id: string; displayName?: string | null; username?: string | null };
-  to?: { id: string; displayName?: string | null; username?: string | null };
-};
-
-export async function GET(_req: NextRequest) {
-  const jar = await cookies();
-
+export async function GET() {
   try {
-    const userId = jar.get("nw_uid")?.value;
-    if (!userId) {
-      return NextResponse.json({ ok: false, message: "Not logged in." }, { status: 200 });
+    // NOTE: cookies() är async i din Next-version
+    const cookieStore = await cookies();
+    const uid = cookieStore.get("nw_uid")?.value ?? null;
+    if (!uid) {
+      return NextResponse.json({ ok: false, message: "Unauthorized." }, { status: 401 });
     }
 
-    // inkommande
+    // INCOMING (till mig, pending)
     const incomingRaw = await prisma.groupInvite.findMany({
-      where: { toUserId: userId, status: "pending" },
+      where: { toUserId: uid, status: "pending" },
       orderBy: { createdAt: "desc" },
       include: {
-        fromUser: { select: { id: true, profile: { select: { displayName: true } }, username: true } },
+        fromUser: {
+          select: {
+            id: true,
+            username: true,
+            profile: { select: { displayName: true } },
+          },
+        },
       },
     });
 
-    // utgående
-    const outgoingRaw = await prisma.groupInvite.findMany({
-      where: { fromUserId: userId, status: "pending" },
-      orderBy: { createdAt: "desc" },
-      include: {
-        toUser: { select: { id: true, profile: { select: { displayName: true } }, username: true } },
-      },
-    });
-
-    const incoming: InviteItem[] = incomingRaw.map((row) => ({
-      id: row.id,
-      groupCode: row.groupCode,
-      status: row.status,
-      createdAt: row.createdAt.toISOString(),
+    const incoming = incomingRaw.map((i) => ({
+      id: i.id,
+      groupCode: i.groupCode,
+      status: i.status,
+      createdAt: i.createdAt,
       from: {
-        id: row.fromUser.id,
-        displayName: row.fromUser.profile?.displayName ?? null,
-        username: row.fromUser.username ?? null,
+        id: i.fromUser.id,
+        displayName: i.fromUser.profile?.displayName ?? null,
+        username: i.fromUser.username,
       },
     }));
 
-    const outgoing: InviteItem[] = outgoingRaw.map((row) => ({
-      id: row.id,
-      groupCode: row.groupCode,
-      status: row.status,
-      createdAt: row.createdAt.toISOString(),
+    // OUTGOING (från mig, pending)
+    const outgoingRaw = await prisma.groupInvite.findMany({
+      where: { fromUserId: uid, status: "pending" },
+      orderBy: { createdAt: "desc" },
+      include: {
+        toUser: {
+          select: {
+            id: true,
+            username: true,
+            profile: { select: { displayName: true } },
+          },
+        },
+      },
+    });
+
+    const outgoing = outgoingRaw.map((i) => ({
+      id: i.id,
+      groupCode: i.groupCode,
+      status: i.status,
+      createdAt: i.createdAt,
       to: {
-        id: row.toUser.id,
-        displayName: row.toUser.profile?.displayName ?? null,
-        username: row.toUser.username ?? null,
+        id: i.toUser.id,
+        displayName: i.toUser.profile?.displayName ?? null,
+        username: i.toUser.username,
       },
     }));
 
-    return NextResponse.json({ ok: true, incoming, outgoing }, { status: 200 });
-  } catch (e) {
-    console.error("invite list GET error:", e);
-    return NextResponse.json({ ok: false, message: "Internal error." }, { status: 200 });
+    return NextResponse.json({ ok: true, incoming, outgoing });
+  } catch (err) {
+    console.error("invite list GET failed", err);
+    return NextResponse.json({ ok: false, message: "Internal error." }, { status: 500 });
   }
 }

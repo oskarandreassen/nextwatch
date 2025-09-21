@@ -1,50 +1,92 @@
 // app/api/group/invite/route.ts
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import prisma from "@/lib/prisma";
 
+type InviteBody = {
+  groupCode: string;
+  toUserId: string;
+};
+
+function bad(message: string, status = 400) {
+  return NextResponse.json({ ok: false, message }, { status });
+}
+
 export async function POST(req: NextRequest) {
-  const jar = await cookies();
-
   try {
-    const body = (await req.json()) as Partial<{ toUserId: string; code?: string }>;
-    const code = body.code ?? jar.get("nw_group")?.value;
-    const fromUserId = jar.get("nw_uid")?.value;
-    const toUserId = body.toUserId;
+    // NOTE: cookies() är async i din Next-version
+    const cookieStore = await cookies();
+    const fromUserId = cookieStore.get("nw_uid")?.value ?? null;
+    if (!fromUserId) return bad("Unauthorized.", 401);
 
-    if (!code || !fromUserId || !toUserId) {
-      return NextResponse.json({ ok: false, message: "Bad request." }, { status: 200 });
-    }
+    const body = (await req.json()) as Partial<InviteBody>;
+    const groupCode = (body.groupCode ?? "").trim();
+    const toUserId = (body.toUserId ?? "").trim();
 
-    // spärr: max 1 invite/minut till samma person i samma grupp
+    if (!groupCode || !toUserId) return bad("Missing groupCode or toUserId.");
+    if (toUserId === fromUserId) return bad("Cannot add yourself.");
+
+    // 1) Är avsändaren medlem i gruppen?
+    const meInGroup = await prisma.groupMember.findUnique({
+      where: { groupCode_userId: { groupCode, userId: fromUserId } },
+      select: { groupCode: true },
+    });
+    if (!meInGroup) return bad("You are not a member of this group.", 403);
+
+    // 2) Finns mottagaren?
+    const targetUser = await prisma.user.findUnique({
+      where: { id: toUserId },
+      select: { id: true },
+    });
+    if (!targetUser) return bad("User not found.", 404);
+
+    // 3) Redan medlem?
+    const targetInGroup = await prisma.groupMember.findUnique({
+      where: { groupCode_userId: { groupCode, userId: toUserId } },
+      select: { userId: true },
+    });
+    if (targetInGroup) return bad("User is already a group member.");
+
+    // 4) Rate-limit: 1/min för samma trio (group, from, to) när pending
     const oneMinuteAgo = new Date(Date.now() - 60_000);
-    const recent = await prisma.groupInvite.findFirst({
+    const recentPending = await prisma.groupInvite.findFirst({
       where: {
-        groupCode: code,
+        groupCode,
         fromUserId,
         toUserId,
-        createdAt: { gte: oneMinuteAgo },
         status: "pending",
+        createdAt: { gte: oneMinuteAgo },
       },
       select: { id: true },
     });
-    if (recent) {
-      return NextResponse.json({ ok: false, message: "Too many requests." }, { status: 200 });
+    if (recentPending) {
+      return bad("You can only send one invite per minute to this user for this group.");
     }
 
-    const created = await prisma.groupInvite.create({
+    // 5) Finns redan en pending?
+    const existingPending = await prisma.groupInvite.findFirst({
+      where: { groupCode, fromUserId, toUserId, status: "pending" },
+      select: { id: true },
+    });
+    if (existingPending) return bad("Invite already pending.");
+
+    // 6) Skapa invite
+    const inv = await prisma.groupInvite.create({
       data: {
-        groupCode: code,
+        groupCode,
         fromUserId,
         toUserId,
         status: "pending",
       },
-      select: { id: true, status: true },
+      select: { id: true, createdAt: true },
     });
 
-    return NextResponse.json({ ok: true, inviteId: created.id, status: created.status }, { status: 200 });
-  } catch (e) {
-    console.error("invite POST error:", e);
-    return NextResponse.json({ ok: false, message: "Internal error." }, { status: 200 });
+    return NextResponse.json({ ok: true, id: inv.id, createdAt: inv.createdAt });
+  } catch (err) {
+    console.error("invite POST failed", err);
+    return NextResponse.json({ ok: false, message: "Internal error." }, { status: 500 });
   }
 }
