@@ -7,8 +7,9 @@ import { cookies } from "next/headers";
 import prisma from "@/lib/prisma";
 
 type InviteBody = {
-  groupCode: string;
-  toUserId: string;
+  groupCode?: string;
+  toUserId?: string;
+  touserId?: string; // legacy fält (klienten har ibland skickat detta)
 };
 
 function bad(message: string, status = 400) {
@@ -17,16 +18,22 @@ function bad(message: string, status = 400) {
 
 export async function POST(req: NextRequest) {
   try {
-    // NOTE: cookies() är async i din Next-version
+    // cookies() är async i din Next-version
     const cookieStore = await cookies();
     const fromUserId = cookieStore.get("nw_uid")?.value ?? null;
     if (!fromUserId) return bad("Unauthorized.", 401);
 
-    const body = (await req.json()) as Partial<InviteBody>;
-    const groupCode = (body.groupCode ?? "").trim();
-    const toUserId = (body.toUserId ?? "").trim();
+    const raw = (await req.json()) as InviteBody;
+
+    // Tillåt både nytt och legacy fältnamn för mottagare
+    const toUserId = (raw.toUserId ?? raw.touserId ?? "").trim();
+
+    // Tillåt fallback till cookie om groupCode inte skickas i body
+    const groupCode =
+      (raw.groupCode ?? cookieStore.get("nw_group")?.value ?? "").trim();
 
     if (!groupCode || !toUserId) return bad("Missing groupCode or toUserId.");
+
     if (toUserId === fromUserId) return bad("Cannot add yourself.");
 
     // 1) Är avsändaren medlem i gruppen?
@@ -63,7 +70,9 @@ export async function POST(req: NextRequest) {
       select: { id: true },
     });
     if (recentPending) {
-      return bad("You can only send one invite per minute to this user for this group.");
+      return bad(
+        "You can only send one invite per minute to this user for this group."
+      );
     }
 
     // 5) Finns redan en pending?
@@ -84,9 +93,16 @@ export async function POST(req: NextRequest) {
       select: { id: true, createdAt: true },
     });
 
-    return NextResponse.json({ ok: true, id: inv.id, createdAt: inv.createdAt });
+    return NextResponse.json({
+      ok: true,
+      id: inv.id,
+      createdAt: inv.createdAt,
+    });
   } catch (err) {
     console.error("invite POST failed", err);
-    return NextResponse.json({ ok: false, message: "Internal error." }, { status: 500 });
+    return NextResponse.json(
+      { ok: false, message: "Internal error." },
+      { status: 500 }
+    );
   }
 }
