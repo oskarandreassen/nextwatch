@@ -10,7 +10,6 @@ type Err = { ok: false; message: string };
 type Body = { id: string; action: "accept" | "decline" };
 
 async function cleanup(): Promise<void> {
-  // rensa utgånget
   await prisma.groupInvite.deleteMany({
     where: { status: "pending", expiresAt: { lt: new Date() } },
   });
@@ -40,32 +39,29 @@ export async function POST(req: NextRequest): Promise<NextResponse<Ok | Err>> {
 
     await cleanup();
 
-    // 1) Hämta inviten
-    const invite = await prisma.groupInvite.findUnique({
-      where: { id },
-    });
-
-    if (!invite) {
-      return NextResponse.json({ ok: false, message: "Invite not found." }, { status: 404 });
-    }
-
-    // 2) Säkerställ att den är till rätt användare
+    const invite = await prisma.groupInvite.findUnique({ where: { id } });
+    if (!invite) return NextResponse.json({ ok: false, message: "Invite not found." }, { status: 404 });
     if (invite.toUserId !== uid) {
       return NextResponse.json({ ok: false, message: "Invite does not belong to you." }, { status: 403 });
     }
-
-    // 3) Måste vara pending
     if (invite.status !== "pending") {
-      return NextResponse.json({ ok: false, message: "Invite is not pending." }, { status: 409 });
+      // inte pending längre – behandla som redan hanterad
+      if (action === "accept") {
+        // säkra medlemskap ändå
+        await prisma.groupMember.upsert({
+          where: { groupCode_userId: { groupCode: invite.groupCode, userId: uid } },
+          create: { groupCode: invite.groupCode, userId: uid },
+          update: {},
+        });
+        return NextResponse.json({ ok: true, joined: invite.groupCode });
+      }
+      return NextResponse.json({ ok: true, declined: true });
     }
-
-    // 4) TTL?
     if (invite.expiresAt && invite.expiresAt < new Date()) {
       await prisma.groupInvite.delete({ where: { id: invite.id } });
       return NextResponse.json({ ok: false, message: "Invite expired." }, { status: 410 });
     }
 
-    // 5) Gruppen måste finnas
     const group = await prisma.group.findUnique({ where: { code: invite.groupCode } });
     if (!group) {
       await prisma.groupInvite.delete({ where: { id: invite.id } });
@@ -73,35 +69,42 @@ export async function POST(req: NextRequest): Promise<NextResponse<Ok | Err>> {
     }
 
     if (action === "decline") {
-      await prisma.groupInvite.update({
-        where: { id: invite.id },
-        data: { status: "declined", respondedAt: new Date() },
-      });
+      try {
+        await prisma.groupInvite.update({
+          where: { id: invite.id },
+          data: { status: "declined", respondedAt: new Date() },
+        });
+      } catch {
+        // ignoreras – kan vara P2002 från tidigare declined
+      }
       return NextResponse.json({ ok: true, declined: true });
     }
 
-    // accept:
-    // 6) Lägg till mottagaren i gruppen om inte redan medlem
+    // ACCEPT
+    // 1) säkra medlemskap
     await prisma.groupMember.upsert({
       where: { groupCode_userId: { groupCode: invite.groupCode, userId: uid } },
       create: { groupCode: invite.groupCode, userId: uid },
       update: {},
     });
 
-    // 7) Markera inviten accepterad
-    await prisma.groupInvite.update({
-      where: { id: invite.id },
-      data: { status: "accepted", respondedAt: new Date() },
-    });
+    // 2) markera invite accepterad – om P2002 pga gammal accepted, fortsätt ändå
+    try {
+      await prisma.groupInvite.update({
+        where: { id: invite.id },
+        data: { status: "accepted", respondedAt: new Date() },
+      });
+    } catch (e) {
+      const code = (e as { code?: string } | null)?.code;
+      if (code !== "P2002") {
+        // okänt fel – men försök ändå returnera joined
+        console.error("invite respond update failed", e);
+      }
+      // Vid P2002: ignorerar – vi har redan lagt in membership
+    }
 
     return NextResponse.json({ ok: true, joined: invite.groupCode });
   } catch (e) {
-    // Prisma-specifika koder vi förväntar oss ibland
-    const code = (e as { code?: string } | null)?.code;
-    if (code === "P2002") {
-      // unik-konflikt (t.ex. samtidigt upsert) → behandla som redan löst
-      return NextResponse.json({ ok: true }, { status: 200 });
-    }
     console.error("invite respond failed", e);
     return NextResponse.json({ ok: false, message: "Internal error." }, { status: 500 });
   }
