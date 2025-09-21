@@ -1,105 +1,163 @@
-// app/api/group/invite/route.ts
+import { NextRequest, NextResponse } from "next/server";
+import { cookies } from "next/headers";
+import { prisma } from "@/lib/prisma";
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-import { NextRequest, NextResponse } from "next/server";
-import { cookies } from "next/headers";
-import prisma from "@/lib/prisma";
+type Ok = { ok: true };
+type Err = { ok: false; message: string };
 
-type InviteBody = {
-  groupCode?: string;
-  toUserId?: string;
-  touserId?: string; // legacy fält (klienten har ibland skickat detta)
-};
+const FIVE_MINUTES_MS = 5 * 60 * 1000;
 
-function bad(message: string, status = 400) {
-  return NextResponse.json({ ok: false, message }, { status });
+function nowPlusFiveMinutes(): Date {
+  return new Date(Date.now() + FIVE_MINUTES_MS);
 }
 
-export async function POST(req: NextRequest) {
+async function cleanup(): Promise<void> {
+  // 1) ta bort expired pending
+  await prisma.groupInvite.deleteMany({
+    where: {
+      status: "pending",
+      expiresAt: { lt: new Date() },
+    },
+  });
+
+  // 2) ta bort pending vars grupp inte längre finns
+  const allGroups = await prisma.group.findMany({ select: { code: true } });
+  const existing = new Set(allGroups.map((g) => g.code));
+  if (existing.size === 0) {
+    await prisma.groupInvite.deleteMany({ where: { status: "pending" } });
+    return;
+  }
+  await prisma.groupInvite.deleteMany({
+    where: {
+      status: "pending",
+      NOT: { groupCode: { in: Array.from(existing) } },
+    },
+  });
+}
+
+export async function POST(req: NextRequest): Promise<NextResponse<Ok | Err>> {
+  const jar = await cookies();
+  const fromUserId = jar.get("nw_uid")?.value ?? "";
+  const groupCode = jar.get("nw_group")?.value ?? "";
+
   try {
-    // cookies() är async i din Next-version
-    const cookieStore = await cookies();
-    const fromUserId = cookieStore.get("nw_uid")?.value ?? null;
-    if (!fromUserId) return bad("Unauthorized.", 401);
+    const body = (await req.json()) as { toUserId?: string } | unknown;
+    if (
+      typeof body !== "object" ||
+      body === null ||
+      typeof (body as { toUserId?: string }).toUserId !== "string"
+    ) {
+      return NextResponse.json(
+        { ok: false, message: "Missing toUserId." },
+        { status: 400 }
+      );
+    }
+    const toUserId = (body as { toUserId: string }).toUserId;
 
-    const raw = (await req.json()) as InviteBody;
-
-    // Tillåt både nytt och legacy fältnamn för mottagare
-    const toUserId = (raw.toUserId ?? raw.touserId ?? "").trim();
-
-    // Tillåt fallback till cookie om groupCode inte skickas i body
-    const groupCode =
-      (raw.groupCode ?? cookieStore.get("nw_group")?.value ?? "").trim();
-
-    if (!groupCode || !toUserId) return bad("Missing groupCode or toUserId.");
-
-    if (toUserId === fromUserId) return bad("Cannot add yourself.");
-
-    // 1) Är avsändaren medlem i gruppen?
-    const meInGroup = await prisma.groupMember.findUnique({
-      where: { groupCode_userId: { groupCode, userId: fromUserId } },
-      select: { groupCode: true },
-    });
-    if (!meInGroup) return bad("You are not a member of this group.", 403);
-
-    // 2) Finns mottagaren?
-    const targetUser = await prisma.user.findUnique({
-      where: { id: toUserId },
-      select: { id: true },
-    });
-    if (!targetUser) return bad("User not found.", 404);
-
-    // 3) Redan medlem?
-    const targetInGroup = await prisma.groupMember.findUnique({
-      where: { groupCode_userId: { groupCode, userId: toUserId } },
-      select: { userId: true },
-    });
-    if (targetInGroup) return bad("User is already a group member.");
-
-    // 4) Rate-limit: 1/min för samma trio (group, from, to) när pending
-    const oneMinuteAgo = new Date(Date.now() - 60_000);
-    const recentPending = await prisma.groupInvite.findFirst({
-      where: {
-        groupCode,
-        fromUserId,
-        toUserId,
-        status: "pending",
-        createdAt: { gte: oneMinuteAgo },
-      },
-      select: { id: true },
-    });
-    if (recentPending) {
-      return bad(
-        "You can only send one invite per minute to this user for this group."
+    if (!fromUserId) {
+      return NextResponse.json(
+        { ok: false, message: "Not authenticated." },
+        { status: 401 }
+      );
+    }
+    if (fromUserId === toUserId) {
+      return NextResponse.json(
+        { ok: false, message: "Cannot add yourself." },
+        { status: 400 }
+      );
+    }
+    if (!groupCode) {
+      return NextResponse.json(
+        { ok: false, message: "No active group." },
+        { status: 400 }
       );
     }
 
-    // 5) Finns redan en pending?
-    const existingPending = await prisma.groupInvite.findFirst({
-      where: { groupCode, fromUserId, toUserId, status: "pending" },
-      select: { id: true },
-    });
-    if (existingPending) return bad("Invite already pending.");
+    // cleanup innan vi skapar
+    await cleanup();
 
-    // 6) Skapa invite
-    const inv = await prisma.groupInvite.create({
+    // grupp måste finnas
+    const group = await prisma.group.findUnique({ where: { code: groupCode } });
+    if (!group) {
+      // städa bort eventuella orphans från denna code
+      await prisma.groupInvite.deleteMany({
+        where: { status: "pending", groupCode },
+      });
+      return NextResponse.json(
+        { ok: false, message: "Group does not exist (gone)." },
+        { status: 410 }
+      );
+    }
+
+    // validera att toUser finns
+    const toUser = await prisma.user.findUnique({ where: { id: toUserId } });
+    if (!toUser) {
+      return NextResponse.json(
+        { ok: false, message: "User not found." },
+        { status: 404 }
+      );
+    }
+
+    // säkerställ att fromUser är medlem i gruppen
+    const member = await prisma.groupMember.findUnique({
+      where: { groupCode_userId: { groupCode, userId: fromUserId } },
+    });
+    if (!member) {
+      return NextResponse.json(
+        { ok: false, message: "Not a member of the active group." },
+        { status: 403 }
+      );
+    }
+
+    // Upsert: om pending mellan samma par finns, uppdatera den; annars skapa
+    const existingPending = await prisma.groupInvite.findFirst({
+      where: {
+        fromUserId,
+        toUserId,
+        status: "pending",
+      },
+    });
+
+    if (existingPending) {
+      await prisma.groupInvite.update({
+        where: { id: existingPending.id },
+        data: {
+          groupCode,
+          expiresAt: nowPlusFiveMinutes(),
+          createdAt: new Date(), // bump sort
+        },
+      });
+      return NextResponse.json({ ok: true });
+    }
+
+    await prisma.groupInvite.create({
       data: {
         groupCode,
         fromUserId,
         toUserId,
         status: "pending",
+        expiresAt: nowPlusFiveMinutes(),
       },
-      select: { id: true, createdAt: true },
     });
 
-    return NextResponse.json({
-      ok: true,
-      id: inv.id,
-      createdAt: inv.createdAt,
-    });
-  } catch (err) {
-    console.error("invite POST failed", err);
+    return NextResponse.json({ ok: true });
+  } catch (e) {
+    // fånga Prisma P2002 → returnera 409 (aldrig 500)
+    if (
+      typeof e === "object" &&
+      e !== null &&
+      "code" in e &&
+      (e as { code?: string }).code === "P2002"
+    ) {
+      return NextResponse.json(
+        { ok: false, message: "Invite already pending." },
+        { status: 409 }
+      );
+    }
+    console.error("invite POST failed", e);
     return NextResponse.json(
       { ok: false, message: "Internal error." },
       { status: 500 }

@@ -1,4 +1,3 @@
-// prisma/schema.prisma
 generator client {
   provider = "prisma-client-js"
 }
@@ -91,7 +90,7 @@ model Rating {
   userId    String   @map("user_id")
   tmdbId    Int      @map("tmdb_id")
   mediaType String   @map("media_type")
-  rating    Int? // 1..10 (optional för bakåtkomp)
+  rating    Int?
   decision  String   @default("RATED")
   decidedAt DateTime @default(now()) @map("decided_at")
 
@@ -137,8 +136,8 @@ model Group {
 
   members     GroupMember[]
   votes       GroupVote[]      @relation("GroupVotes")
-  invites     GroupInvite[] // <— behövs för relationen ovan
-  matchesSeen GroupMatchSeen[] // <— bra att ha på denna sidan också
+  invites     GroupInvite[]
+  matchesSeen GroupMatchSeen[]
 
   creator User @relation("UserGroupsCreated", fields: [createdBy], references: [id], onDelete: Cascade)
 
@@ -161,8 +160,8 @@ model GroupVote {
   groupCode String   @map("group_code")
   userId    String   @map("user_id")
   tmdbId    Int      @map("tmdb_id")
-  tmdbType  String   @map("tmdb_type") // 'movie' | 'tv'
-  vote      String // 'LIKE' | 'DISLIKE' | 'SKIP'
+  tmdbType  String   @map("tmdb_type")
+  vote      String
   decidedAt DateTime @default(now()) @map("decided_at")
 
   group Group @relation("GroupVotes", fields: [groupCode], references: [code], onDelete: Cascade)
@@ -207,16 +206,18 @@ model GroupInvite {
   createdAt   DateTime  @default(now()) @map("created_at")
   respondedAt DateTime? @map("responded_at")
 
+  // NEW: TTL för pending-invites (5 min)
+  expiresAt DateTime? @map("expires_at")
+
   group    Group @relation(fields: [groupCode], references: [code], onDelete: Cascade)
   fromUser User  @relation("GroupInvitesFrom", fields: [fromUserId], references: [id], onDelete: Cascade)
   toUser   User  @relation("GroupInvitesTo", fields: [toUserId], references: [id], onDelete: Cascade)
 
+  // Tillåt exakt en pending mellan två användare (oavsett grupp)
+  @@unique([fromUserId, toUserId, status], map: "uq_group_invites_pair_status")
   @@map("group_invites")
 }
 
-//
-// NEW: per-user kvittens så overlay inte loopar
-//
 model GroupMatchSeen {
   groupCode String   @map("group_code")
   userId    String   @map("user_id")

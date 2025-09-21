@@ -1,24 +1,55 @@
-// app/api/group/invite/list/route.ts
+import { NextResponse } from "next/server";
+import { cookies } from "next/headers";
+import { prisma } from "@/lib/prisma";
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
-import prisma from "@/lib/prisma";
+type PublicUser = { id: string; displayName: string | null; username: string | null };
 
-export async function GET() {
-  try {
-    // NOTE: cookies() är async i din Next-version
-    const cookieStore = await cookies();
-    const uid = cookieStore.get("nw_uid")?.value ?? null;
-    if (!uid) {
-      return NextResponse.json({ ok: false, message: "Unauthorized." }, { status: 401 });
-    }
+type InviteItem = {
+  id: string;
+  groupCode: string;
+  status: string;
+  createdAt: string;
+  from?: PublicUser;
+  to?: PublicUser;
+};
 
-    // INCOMING (till mig, pending)
-    const incomingRaw = await prisma.groupInvite.findMany({
-      where: { toUserId: uid, status: "pending" },
+type Payload = {
+  ok: true;
+  incoming: InviteItem[];
+  outgoing: InviteItem[];
+};
+
+async function cleanup(): Promise<void> {
+  // expired pending
+  await prisma.groupInvite.deleteMany({
+    where: { status: "pending", expiresAt: { lt: new Date() } },
+  });
+
+  // invites vars grupp saknas
+  const groups = await prisma.group.findMany({ select: { code: true } });
+  const existing = new Set(groups.map((g) => g.code));
+  await prisma.groupInvite.deleteMany({
+    where: {
+      status: "pending",
+      NOT: { groupCode: { in: Array.from(existing) } },
+    },
+  });
+}
+
+export async function GET(): Promise<ReturnType<typeof NextResponse.json<Payload>>> {
+  const jar = await cookies();
+  const uid = jar.get("nw_uid")?.value ?? "";
+
+  await cleanup();
+
+  const [incoming, outgoing] = await Promise.all([
+    prisma.groupInvite.findMany({
+      where: { toUserId: uid },
       orderBy: { createdAt: "desc" },
+      take: 50,
       include: {
         fromUser: {
           select: {
@@ -28,24 +59,11 @@ export async function GET() {
           },
         },
       },
-    });
-
-    const incoming = incomingRaw.map((i) => ({
-      id: i.id,
-      groupCode: i.groupCode,
-      status: i.status,
-      createdAt: i.createdAt,
-      from: {
-        id: i.fromUser.id,
-        displayName: i.fromUser.profile?.displayName ?? null,
-        username: i.fromUser.username,
-      },
-    }));
-
-    // OUTGOING (från mig, pending)
-    const outgoingRaw = await prisma.groupInvite.findMany({
-      where: { fromUserId: uid, status: "pending" },
+    }),
+    prisma.groupInvite.findMany({
+      where: { fromUserId: uid },
       orderBy: { createdAt: "desc" },
+      take: 50,
       include: {
         toUser: {
           select: {
@@ -55,23 +73,32 @@ export async function GET() {
           },
         },
       },
-    });
+    }),
+  ]);
 
-    const outgoing = outgoingRaw.map((i) => ({
-      id: i.id,
-      groupCode: i.groupCode,
-      status: i.status,
-      createdAt: i.createdAt,
-      to: {
-        id: i.toUser.id,
-        displayName: i.toUser.profile?.displayName ?? null,
-        username: i.toUser.username,
-      },
-    }));
+  const mapIncoming: InviteItem[] = incoming.map((r) => ({
+    id: r.id,
+    groupCode: r.groupCode,
+    status: r.status,
+    createdAt: r.createdAt.toISOString(),
+    from: {
+      id: r.fromUser.id,
+      displayName: r.fromUser.profile?.displayName ?? null,
+      username: r.fromUser.username ?? null,
+    },
+  }));
 
-    return NextResponse.json({ ok: true, incoming, outgoing });
-  } catch (err) {
-    console.error("invite list GET failed", err);
-    return NextResponse.json({ ok: false, message: "Internal error." }, { status: 500 });
-  }
+  const mapOutgoing: InviteItem[] = outgoing.map((r) => ({
+    id: r.id,
+    groupCode: r.groupCode,
+    status: r.status,
+    createdAt: r.createdAt.toISOString(),
+    to: {
+      id: r.toUser.id,
+      displayName: r.toUser.profile?.displayName ?? null,
+      username: r.toUser.username ?? null,
+    },
+  }));
+
+  return NextResponse.json({ ok: true, incoming: mapIncoming, outgoing: mapOutgoing });
 }
