@@ -248,13 +248,50 @@ async function leaveGroup(): Promise<Api<{ success: true }>> {
   return { ok: true, success: true };
 }
 
+/** UPDATED: stöder {incoming} (nytt) + {invites} (legacy) och returnerar { invites } */
 async function listIncomingInvites(): Promise<Api<{ invites: IncomingInvite[] }>> {
   const res = await fetch("/api/group/invite/list", { cache: "no-store" });
   if (!res.ok) return { ok: false, message: "Kunde inte hämta invites." };
   try {
     const data = (await res.json()) as unknown;
+
+    const invites: IncomingInvite[] = [];
+    // Nytt format
+    if (isRecord(data) && Array.isArray((data as Record<string, unknown>).incoming)) {
+      const inc = (data as Record<string, unknown>).incoming as Array<Record<string, unknown>>;
+      for (const r of inc) {
+        const status = String(r.status ?? "pending");
+        if (status !== "pending") continue;
+        const fromObj = isRecord(r.from) ? (r.from as Record<string, unknown>) : undefined;
+        invites.push({
+          id: String(r.id ?? ""),
+          groupCode: String(r.groupCode ?? ""),
+          createdAt: String(r.createdAt ?? new Date().toISOString()),
+          from: {
+            id: String(fromObj?.id ?? ""),
+            username: (fromObj?.username ?? null) as string | null,
+            displayName: (fromObj?.displayName ?? null) as string | null,
+          },
+        });
+      }
+      return { ok: true, invites };
+    }
+    // Legacy
     if (isRecord(data) && Array.isArray((data as Record<string, unknown>).invites)) {
-      const invites = (data as Record<string, unknown>).invites as IncomingInvite[];
+      const raw = (data as Record<string, unknown>).invites as Array<Record<string, unknown>>;
+      for (const r of raw) {
+        const fromObj = isRecord(r.from) ? (r.from as Record<string, unknown>) : undefined;
+        invites.push({
+          id: String(r.id ?? ""),
+          groupCode: String(r.groupCode ?? ""),
+          createdAt: String(r.createdAt ?? new Date().toISOString()),
+          from: {
+            id: String(fromObj?.id ?? ""),
+            username: (fromObj?.username ?? null) as string | null,
+            displayName: (fromObj?.displayName ?? null) as string | null,
+          },
+        });
+      }
       return { ok: true, invites };
     }
     return { ok: false, message: "Felaktigt svar." };
@@ -284,11 +321,15 @@ async function sendInvite(toUserId: string): Promise<Api<{ requestId: string }>>
   }
 }
 
-async function respondInvite(inviteId: string, action: "accept" | "decline"): Promise<Api<{ joined?: string; declined?: boolean }>> {
+/** UPDATED: skickar { id, action } (server förväntar det) */
+async function respondInvite(
+  inviteId: string,
+  action: "accept" | "decline"
+): Promise<Api<{ joined?: string; declined?: boolean }>> {
   const res = await fetch("/api/group/invite/respond", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ inviteId, action }),
+    body: JSON.stringify({ id: inviteId, action }),
   });
   try {
     const data = (await res.json()) as unknown;
@@ -329,6 +370,18 @@ export default function GroupClient({ initial }: { initial: GroupInitial }) {
   const [friends, setFriends] = useState<FriendsListUser[]>([]);
   const [pendingIn, setPendingIn] = useState<{ requestId: string; from: FriendsListUser }[]>([]);
   const [pendingOut, setPendingOut] = useState<{ requestId: string; to: FriendsListUser }[]>([]);
+
+  // set med vänners id för Group-tabben (dölja +Add)
+  const [friendsIdSet, setFriendsIdSet] = useState<Set<string>>(new Set());
+  useEffect(() => {
+    // Hämta en gång vid mount så Group-tab kan dölja +Add för befintliga vänner
+    (async () => {
+      const r = await friendsList();
+      if (r.ok) {
+        setFriendsIdSet(new Set((r.friends ?? []).map((u) => u.id)));
+      }
+    })();
+  }, []);
 
   // local UX markers
   const [sentToIds, setSentToIds] = useState<Set<string>>(new Set());
@@ -512,6 +565,7 @@ export default function GroupClient({ initial }: { initial: GroupInitial }) {
           setInviteOpen={setInviteOpen}
           invitedIds={invitedIds}
           setInvitedIds={setInvitedIds}
+          friendsIdSet={friendsIdSet}
         />
       ) : (
         <FriendsTab friends={friends} pendingIn={pendingIn} pendingOut={pendingOut} q={q} setQ={setQ} results={results} />
@@ -575,6 +629,7 @@ function GroupTab({
   setInviteOpen,
   invitedIds,
   setInvitedIds,
+  friendsIdSet,
 }: {
   code: string | null;
   region?: string;
@@ -593,6 +648,7 @@ function GroupTab({
   setInviteOpen: (v: boolean) => void;
   invitedIds: Set<string>;
   setInvitedIds: (s: Set<string>) => void;
+  friendsIdSet: Set<string>;
 }) {
   return (
     <div className="space-y-6">
@@ -641,6 +697,7 @@ function GroupTab({
                 {members.map((m) => {
                   const isMe = meUserId && m.userId === meUserId;
                   const alreadySent = sentToIds.has(m.userId) || pendingOutIds.has(m.userId);
+                  const isFriend = friendsIdSet.has(m.userId);
                   return (
                     <li key={m.userId} className="flex items-center justify-between rounded-xl border border-neutral-800 bg-neutral-950/40 px-3 py-2">
                       <div className="min-w-0">
@@ -658,6 +715,8 @@ function GroupTab({
                       <div className="flex items-center gap-2">
                         {isMe ? (
                           <span className="text-xs opacity-60">You</span>
+                        ) : isFriend ? (
+                          <span className="text-xs opacity-70">Friend</span>
                         ) : alreadySent ? (
                           <span className="text-xs opacity-70">Request sent</span>
                         ) : (
