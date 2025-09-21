@@ -45,9 +45,10 @@ export async function GET(): Promise<ReturnType<typeof NextResponse.json<Payload
 
   await cleanup();
 
+  // Returnera ENDAST pending – gamla accepted/declined visas inte längre i listan
   const [incoming, outgoing] = await Promise.all([
     prisma.groupInvite.findMany({
-      where: { toUserId: uid },
+      where: { toUserId: uid, status: "pending" },
       orderBy: { createdAt: "desc" },
       take: 50,
       include: {
@@ -61,7 +62,7 @@ export async function GET(): Promise<ReturnType<typeof NextResponse.json<Payload
       },
     }),
     prisma.groupInvite.findMany({
-      where: { fromUserId: uid },
+      where: { fromUserId: uid, status: "pending" },
       orderBy: { createdAt: "desc" },
       take: 50,
       include: {
