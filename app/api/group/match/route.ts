@@ -1,111 +1,177 @@
 // app/api/group/match/route.ts
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import { prisma } from "../../../../lib/prisma";
+import prisma from "@/lib/prisma";
 
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
+type TmdbType = "movie" | "tv";
 
-/** 60%-regeln med rimligt minsta krav (2) */
-function likeThreshold(n: number): number {
-  if (n <= 2) return 2;
-  return Math.ceil(0.6 * n);
+type TmdbLite = {
+  tmdbId: number;
+  tmdbType: TmdbType;
+  title: string;
+  year?: number;
+  poster?: string;
+  rating?: number;
+  overview?: string;
+  providers?: { name: string; url: string }[];
+};
+
+function yearFromDate(date?: string | null): number | undefined {
+  if (!date) return undefined;
+  const y = Number.parseInt(date.slice(0, 4), 10);
+  return Number.isFinite(y) ? y : undefined;
 }
 
-type MatchItem = {
-  tmdbId: number;
-  mediaType: "movie" | "tv";
-  likes: number;
-};
+async function tmdbDetails(
+  type: TmdbType,
+  id: number,
+  locale: string
+): Promise<TmdbLite | null> {
+  const token = process.env.TMDB_TOKEN ?? process.env.TMDB_BEARER ?? "";
+  const apiKey = process.env.TMDB_API_KEY ?? "";
 
-type ApiOk = {
-  ok: true;
-  size: number;           // antal medlemmar i gruppen
-  need: number;           // likes som krävs för match
-  count: number;          // antal matcher
-  match: MatchItem | null; // toppmatch (för enkel overlay)
-  matches: MatchItem[];    // alla matcher sorterade (flest likes först)
-};
+  const base = `https://api.themoviedb.org/3/${type}/${id}`;
+  const url = apiKey
+    ? `${base}?language=${encodeURIComponent(locale)}&append_to_response=watch/providers&api_key=${apiKey}`
+    : `${base}?language=${encodeURIComponent(locale)}&append_to_response=watch/providers`;
 
-type ApiErr = { ok: false; error: string };
+  const res = await fetch(url, {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    cache: "no-store",
+  });
+  if (!res.ok) return null;
+  const data = (await res.json()) as Record<string, unknown>;
 
-export async function GET(req: Request) {
-  // Följ regeln: anropa cookies() i App Router
-  await cookies();
+  const title =
+    (type === "movie" ? (data.title as string | undefined) : (data.name as string | undefined)) ??
+    "";
+  const release =
+    (type === "movie"
+      ? (data.release_date as string | undefined)
+      : (data.first_air_date as string | undefined)) ?? null;
 
+  const poster = (data.poster_path as string | undefined) ?? undefined;
+  const rating =
+    typeof data.vote_average === "number" && Number.isFinite(data.vote_average)
+      ? (data.vote_average as number)
+      : undefined;
+  const overview = (data.overview as string | undefined) ?? undefined;
+
+  const provRoot = (data["watch/providers"] as Record<string, unknown> | undefined)?.results as
+    | Record<string, { link?: string }>
+    | undefined;
+
+  const providers: { name: string; url: string }[] = [];
+  if (provRoot) {
+    const countries = ["SE", "GB", "US"];
+    for (const cc of countries) {
+      const node = provRoot[cc];
+      if (node?.link) providers.push({ name: `Stream (${cc})`, url: node.link });
+    }
+  }
+
+  return {
+    tmdbId: id,
+    tmdbType: type,
+    title,
+    year: yearFromDate(release),
+    poster,
+    rating,
+    overview,
+    providers,
+  };
+}
+
+export async function GET(req: NextRequest) {
   try {
-    const u = new URL(req.url);
-    const code = (u.searchParams.get("code") || "").toUpperCase();
+    const jar = await cookies();
+    const url = new URL(req.url);
+    const code =
+      url.searchParams.get("code") ??
+      jar.get("nw_group")?.value ??
+      url.searchParams.get("group") ??
+      undefined;
+
     if (!code) {
-      return NextResponse.json({ ok: false, error: "missing code" } as ApiErr, { status: 400 });
+      return NextResponse.json(
+        { ok: false, message: "Missing group code.", size: 0, need: 0, count: 0, match: null, matches: [] },
+        { status: 200 }
+      );
     }
 
-    // Hämta medlemmar → storlek på gruppen
-    const members = await prisma.groupMember.findMany({
-      where: { groupCode: code },
-      select: { userId: true },
+    const userId = jar.get("nw_uid")?.value ?? undefined;
+    const locale = jar.get("nw_locale")?.value ?? "sv-SE";
+
+    const size = await prisma.groupMember.count({ where: { groupCode: code } });
+    const need = Math.max(2, Math.ceil(size * 0.6));
+
+    const top = await prisma.groupVote.groupBy({
+      by: ["tmdbId", "tmdbType"],
+      where: { groupCode: code, vote: "LIKE" },
+      _count: { _all: true },
+      // För att undvika typbråk – sortera på _count.tmdbId i stället för _all
+      orderBy: { _count: { tmdbId: "desc" } },
+      take: 20,
     });
-    const ids = members.map((m) => m.userId);
-    const n = ids.length;
-    if (n === 0) {
-      const empty: ApiOk = { ok: true, size: 0, need: 0, count: 0, match: null, matches: [] };
-      return NextResponse.json(empty);
-    }
 
-    // Läs alla röster i gruppen (LIKE/DISLIKE/SKIP), men vi bryr oss om LIKE/DISLIKE
-    const votes = await prisma.groupVote.findMany({
-      where: { groupCode: code },
-      select: { userId: true, tmdbId: true, tmdbType: true, vote: true },
-    });
+    let chosen: { tmdbId: number; tmdbType: TmdbType; count: number } | null = null;
 
-    // Aggregat per (tmdbId, tmdbType)
-    const key = (id: number, t: "movie" | "tv") => `${id}:${t}`;
-    const likes = new Map<string, Set<string>>();
-    const dislikes = new Map<string, Set<string>>();
-
-    for (const v of votes) {
-      // Vi följer samma logik som tidigare: en enda DISLIKE blockerar matchen
-      const k = key(v.tmdbId, v.tmdbType as "movie" | "tv");
-      if (v.vote === "LIKE") {
-        if (!likes.has(k)) likes.set(k, new Set());
-        likes.get(k)!.add(v.userId);
-      } else if (v.vote === "DISLIKE") {
-        if (!dislikes.has(k)) dislikes.set(k, new Set());
-        dislikes.get(k)!.add(v.userId);
-      }
-    }
-
-    const need = likeThreshold(n);
-    const matches: MatchItem[] = [];
-
-    for (const [k, set] of likes.entries()) {
-      const [idStr, mt] = k.split(":");
-      const likeCount = set.size;
+    for (const row of top) {
+      const likeCount = row._count?._all ?? 0;
       if (likeCount < need) continue;
-      // Blockera objekt där någon i gruppen aktivt ogillat
-      if ((dislikes.get(k)?.size ?? 0) > 0) continue;
 
-      matches.push({
-        tmdbId: Number(idStr),
-        mediaType: mt as "movie" | "tv",
-        likes: likeCount,
-      });
+      if (userId) {
+        const already = await prisma.groupMatchSeen.findUnique({
+          where: {
+            groupCode_userId_tmdbId_tmdbType: {
+              groupCode: code,
+              userId,
+              tmdbId: row.tmdbId,
+              tmdbType: row.tmdbType as TmdbType,
+            },
+          },
+          select: { tmdbId: true },
+        });
+        if (already) continue;
+      }
+
+      chosen = {
+        tmdbId: row.tmdbId,
+        tmdbType: row.tmdbType as TmdbType,
+        count: likeCount,
+      };
+      break;
     }
 
-    matches.sort((a, b) => b.likes - a.likes);
+    if (!chosen) {
+      return NextResponse.json(
+        { ok: true, size, need, count: 0, match: null, matches: [] },
+        { status: 200 }
+      );
+    }
 
-    const body: ApiOk = {
-      ok: true,
-      size: n,
-      need,
-      count: matches.length,
-      match: matches[0] ?? null, // <— för enklare overlay-klient
-      matches,
-    };
+    const details = await tmdbDetails(chosen.tmdbType, chosen.tmdbId, locale);
 
-    return NextResponse.json(body);
+    return NextResponse.json(
+      {
+        ok: true,
+        size,
+        need,
+        count: chosen.count,
+        match: details ?? {
+          tmdbId: chosen.tmdbId,
+          tmdbType: chosen.tmdbType,
+          title: "",
+        },
+        matches: [],
+      },
+      { status: 200 }
+    );
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    return NextResponse.json({ ok: false, error: msg } as ApiErr, { status: 500 });
+    console.error("match GET error:", e);
+    return NextResponse.json(
+      { ok: false, message: "Internal error.", size: 0, need: 0, count: 0, match: null, matches: [] },
+      { status: 200 }
+    );
   }
 }

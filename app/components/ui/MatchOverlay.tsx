@@ -1,13 +1,26 @@
+// app/components/ui/MatchOverlay.tsx
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
 import Image from "next/image";
-import type { GroupMatchItem, ProviderLink } from "@/lib/useGroupMatch";
+
+export type ProviderLink = { name: string; url: string };
+export type GroupMatchItem = {
+  tmdbId: number;
+  tmdbType: "movie" | "tv";
+  title: string;
+  year?: number;
+  poster?: string;
+  rating?: number;
+  overview?: string;
+  providers?: ProviderLink[];
+};
 
 type Props = {
   open: boolean;
   item?: GroupMatchItem | null;
   onClose: () => void;
+  code?: string; // gruppkod för ack (hämtas även server-side, men bra att skicka med)
 };
 
 function normalizePoster(src?: string): string | undefined {
@@ -16,8 +29,8 @@ function normalizePoster(src?: string): string | undefined {
   return `https://image.tmdb.org/t/p/w780${src}`;
 }
 
-export default function MatchOverlay({ open, item, onClose }: Props) {
-  // Hooks först, inga conditionals
+export default function MatchOverlay({ open, item, onClose, code }: Props) {
+  // Hooks alltid i toppen
   const [flipped, setFlipped] = useState(false);
 
   const posterSrc = useMemo(() => normalizePoster(item?.poster), [item?.poster]);
@@ -30,10 +43,28 @@ export default function MatchOverlay({ open, item, onClose }: Props) {
   const providers: ProviderLink[] = item?.providers ?? [];
 
   const onFlip = useCallback(() => setFlipped((f) => !f), []);
-  const onContinue = useCallback(() => {
-    setFlipped(false);
-    onClose();
-  }, [onClose]);
+
+  const ackAndClose = useCallback(async () => {
+    try {
+      if (item) {
+        // Kvittera så /match inte returnerar samma direkt igen
+        await fetch("/api/group/match/ack", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            code,
+            tmdbId: item.tmdbId,
+            tmdbType: item.tmdbType,
+          }),
+        });
+      }
+    } catch {
+      // svälj – det är inte kritiskt för användaren
+    } finally {
+      setFlipped(false);
+      onClose();
+    }
+  }, [code, item, onClose]);
 
   if (!open || !item) return null;
 
@@ -43,10 +74,12 @@ export default function MatchOverlay({ open, item, onClose }: Props) {
       role="dialog"
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/70"
     >
-      <button aria-label="Close overlay" onClick={onContinue} className="absolute inset-0" />
+      {/* Klick utanför kortet stänger */}
+      <button aria-label="Close overlay" onClick={ackAndClose} className="absolute inset-0" />
 
       <div
         className="relative mx-4 w-full max-w-sm"
+        // Undvik att krocka med mobilen nav-bar i botten
         style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 16px)" }}
       >
         <div className="mb-2 text-center text-sm font-semibold text-white">
@@ -57,7 +90,7 @@ export default function MatchOverlay({ open, item, onClose }: Props) {
         </div>
 
         <div
-          className="group relative h-[70vh] w-full cursor-pointer [perspective:1200px]"
+          className="group relative h-[68vh] w-full cursor-pointer [perspective:1200px]"
           onClick={onFlip}
         >
           {/* Front (bild) */}
@@ -141,7 +174,7 @@ export default function MatchOverlay({ open, item, onClose }: Props) {
           </button>
           <button
             type="button"
-            onClick={onContinue}
+            onClick={ackAndClose}
             className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500"
           >
             Continue swiping

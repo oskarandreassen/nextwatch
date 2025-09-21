@@ -1,65 +1,62 @@
 // app/api/group/invite/respond/route.ts
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
-
-import { NextResponse, NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import prisma from "@/lib/prisma";
 
-type Body = { inviteId?: string; action?: "accept" | "decline" };
-
 export async function POST(req: NextRequest) {
+  const jar = await cookies();
+
   try {
-    const cookieStore = await cookies();
-    const me = cookieStore.get("nw_uid")?.value ?? "";
-    if (!me) return NextResponse.json({ ok: false, message: "Not authenticated." }, { status: 401 });
+    const userId = jar.get("nw_uid")?.value;
+    if (!userId) return NextResponse.json({ ok: false, message: "Not logged in." }, { status: 200 });
 
-    const body = (await req.json()) as Body;
-    const inviteId = body?.inviteId ?? "";
-    const action = body?.action ?? "decline";
-    if (!inviteId) return NextResponse.json({ ok: false, message: "Missing inviteId." }, { status: 400 });
+    const body = (await req.json()) as Partial<{ inviteId: string; action: "accept" | "decline" }>;
+    const inviteId = body.inviteId;
+    const action = body.action;
 
-    const invite = await prisma.groupInvite.findUnique({
-      where: { id: inviteId },
-      include: { group: true },
-    });
-    if (!invite || invite.toUserId !== me || invite.status !== "pending") {
-      return NextResponse.json({ ok: false, message: "Invite not found." }, { status: 404 });
+    if (!inviteId || (action !== "accept" && action !== "decline")) {
+      return NextResponse.json({ ok: false, message: "Bad request." }, { status: 200 });
     }
 
-    if (action === "accept") {
-      // Markera accepterad
+    // läs invite + säkerställ att mottagaren är den som svarar
+    const inv = await prisma.groupInvite.findUnique({
+      where: { id: inviteId },
+      select: { id: true, groupCode: true, toUserId: true, status: true },
+    });
+    if (!inv || inv.toUserId !== userId || inv.status !== "pending") {
+      return NextResponse.json({ ok: false, message: "Invite not found." }, { status: 200 });
+    }
+
+    if (action === "decline") {
       await prisma.groupInvite.update({
+        where: { id: inviteId },
+        data: { status: "declined", respondedAt: new Date() },
+      });
+      return NextResponse.json({ ok: true, status: "declined" }, { status: 200 });
+    }
+
+    // accept
+    await prisma.$transaction(async (tx) => {
+      await tx.groupInvite.update({
         where: { id: inviteId },
         data: { status: "accepted", respondedAt: new Date() },
       });
 
-      // Lämna ev. andra grupper och gå med i denna
-      await prisma.groupMember.deleteMany({ where: { userId: me, NOT: { groupCode: invite.groupCode } } });
-      await prisma.groupMember.upsert({
-        where: { groupCode_userId: { groupCode: invite.groupCode, userId: me } },
-        create: { groupCode: invite.groupCode, userId: me },
-        update: {},
+      // in i gruppen om inte redan medlem
+      const exists = await tx.groupMember.findUnique({
+        where: { groupCode_userId: { groupCode: inv.groupCode, userId } },
+        select: { userId: true },
       });
-
-      const res = NextResponse.json({ ok: true, joined: invite.groupCode });
-      // Sätt aktiv grupp-cookie
-      res.cookies.set({
-        name: "nw_group",
-        value: invite.groupCode,
-        path: "/",
-      });
-      return res;
-    }
-
-    // decline
-    await prisma.groupInvite.update({
-      where: { id: inviteId },
-      data: { status: "declined", respondedAt: new Date() },
+      if (!exists) {
+        await tx.groupMember.create({
+          data: { groupCode: inv.groupCode, userId },
+        });
+      }
     });
 
-    return NextResponse.json({ ok: true, declined: true });
-  } catch {
-    return NextResponse.json({ ok: false, message: "Internal error." }, { status: 500 });
+    return NextResponse.json({ ok: true, status: "accepted" }, { status: 200 });
+  } catch (e) {
+    console.error("invite respond POST error:", e);
+    return NextResponse.json({ ok: false, message: "Internal error." }, { status: 200 });
   }
 }

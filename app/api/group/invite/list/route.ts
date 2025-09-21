@@ -1,43 +1,71 @@
 // app/api/group/invite/list/route.ts
-export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
-
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import prisma from "@/lib/prisma";
 
-export async function GET() {
+type InviteItem = {
+  id: string;
+  groupCode: string;
+  status: string;
+  createdAt: string;
+  from?: { id: string; displayName?: string | null; username?: string | null };
+  to?: { id: string; displayName?: string | null; username?: string | null };
+};
+
+export async function GET(_req: NextRequest) {
+  const jar = await cookies();
+
   try {
-    const cookieStore = await cookies();
-    const me = cookieStore.get("nw_uid")?.value ?? "";
-    if (!me) return NextResponse.json({ ok: false, message: "Not authenticated." }, { status: 401 });
+    const userId = jar.get("nw_uid")?.value;
+    if (!userId) {
+      return NextResponse.json({ ok: false, message: "Not logged in." }, { status: 200 });
+    }
 
-    const invites = await prisma.groupInvite.findMany({
-      where: { toUserId: me, status: "pending" },
-      include: {
-        group: { select: { code: true } },
-        fromUser: {
-          select: { id: true, username: true, profile: { select: { displayName: true } } },
-        },
-      },
+    // inkommande
+    const incomingRaw = await prisma.groupInvite.findMany({
+      where: { toUserId: userId, status: "pending" },
       orderBy: { createdAt: "desc" },
-      take: 10,
+      include: {
+        fromUser: { select: { id: true, profile: { select: { displayName: true } }, username: true } },
+      },
     });
 
-    return NextResponse.json({
-      ok: true,
-      invites: invites.map((i) => ({
-        id: i.id,
-        groupCode: i.group.code,
-        from: {
-          id: i.fromUser.id,
-          username: i.fromUser.username,
-          displayName: i.fromUser.profile?.displayName ?? null,
-        },
-        createdAt: i.createdAt,
-      })),
+    // utgående
+    const outgoingRaw = await prisma.groupInvite.findMany({
+      where: { fromUserId: userId, status: "pending" },
+      orderBy: { createdAt: "desc" },
+      include: {
+        toUser: { select: { id: true, profile: { select: { displayName: true } }, username: true } },
+      },
     });
-  } catch {
-    return NextResponse.json({ ok: false, message: "Internal error." }, { status: 500 });
+
+    const incoming: InviteItem[] = incomingRaw.map((row) => ({
+      id: row.id,
+      groupCode: row.groupCode,
+      status: row.status,
+      createdAt: row.createdAt.toISOString(),
+      from: {
+        id: row.fromUser.id,
+        displayName: row.fromUser.profile?.displayName ?? null,
+        username: row.fromUser.username ?? null,
+      },
+    }));
+
+    const outgoing: InviteItem[] = outgoingRaw.map((row) => ({
+      id: row.id,
+      groupCode: row.groupCode,
+      status: row.status,
+      createdAt: row.createdAt.toISOString(),
+      to: {
+        id: row.toUser.id,
+        displayName: row.toUser.profile?.displayName ?? null,
+        username: row.toUser.username ?? null,
+      },
+    }));
+
+    return NextResponse.json({ ok: true, incoming, outgoing }, { status: 200 });
+  } catch (e) {
+    console.error("invite list GET error:", e);
+    return NextResponse.json({ ok: false, message: "Internal error." }, { status: 200 });
   }
 }

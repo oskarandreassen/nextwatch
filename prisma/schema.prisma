@@ -39,9 +39,9 @@ model User {
   friendshipsAsUser      Friendship[]    @relation("FriendshipUser")
   friendshipsAsFriend    Friendship[]    @relation("FriendshipFriend")
 
-  // Group invites
-  groupInvitesSent     GroupInvite[] @relation("GroupInvitesFrom")
-  groupInvitesReceived GroupInvite[] @relation("GroupInvitesTo")
+  groupInvitesSent     GroupInvite[]    @relation("GroupInvitesFrom")
+  groupInvitesReceived GroupInvite[]    @relation("GroupInvitesTo")
+  groupMatchesSeen     GroupMatchSeen[]
 
   verifications Verification[]
 
@@ -135,9 +135,10 @@ model Group {
   createdBy String   @map("created_by")
   createdAt DateTime @default(now()) @map("created_at")
 
-  members GroupMember[]
-  votes   GroupVote[]   @relation("GroupVotes")
-  invites GroupInvite[]
+  members     GroupMember[]
+  votes       GroupVote[]      @relation("GroupVotes")
+  invites     GroupInvite[] // <— behövs för relationen ovan
+  matchesSeen GroupMatchSeen[] // <— bra att ha på denna sidan också
 
   creator User @relation("UserGroupsCreated", fields: [createdBy], references: [id], onDelete: Cascade)
 
@@ -211,4 +212,21 @@ model GroupInvite {
   toUser   User  @relation("GroupInvitesTo", fields: [toUserId], references: [id], onDelete: Cascade)
 
   @@map("group_invites")
+}
+
+//
+// NEW: per-user kvittens så overlay inte loopar
+//
+model GroupMatchSeen {
+  groupCode String   @map("group_code")
+  userId    String   @map("user_id")
+  tmdbId    Int      @map("tmdb_id")
+  tmdbType  String   @map("tmdb_type")
+  seenAt    DateTime @default(now()) @map("seen_at")
+
+  group Group @relation(fields: [groupCode], references: [code], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([groupCode, userId, tmdbId, tmdbType])
+  @@map("group_match_seen")
 }
