@@ -4,6 +4,7 @@ import React from "react";
 import AppShell from "./components/layouts/AppShell";
 import OverlayMount from "./components/client/OverlayMount";
 import { cookies } from "next/headers";
+import { SpeedInsights } from "@vercel/speed-insights/next"
 
 export const metadata: Metadata = {
   title: "NextWatch",

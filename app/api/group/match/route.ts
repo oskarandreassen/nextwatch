@@ -1,4 +1,7 @@
 // app/api/group/match/route.ts
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
 import { NextRequest, NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import prisma from "@/lib/prisma";
@@ -40,6 +43,7 @@ async function tmdbDetails(
     cache: "no-store",
   });
   if (!res.ok) return null;
+
   const data = (await res.json()) as Record<string, unknown>;
 
   const title =
@@ -86,6 +90,7 @@ export async function GET(req: NextRequest) {
   try {
     const jar = await cookies();
     const url = new URL(req.url);
+
     const code =
       url.searchParams.get("code") ??
       jar.get("nw_group")?.value ??
@@ -105,16 +110,21 @@ export async function GET(req: NextRequest) {
     const size = await prisma.groupMember.count({ where: { groupCode: code } });
     const need = Math.max(2, Math.ceil(size * 0.6));
 
+    // Ranka kandidater på antal LIKE
     const top = await prisma.groupVote.groupBy({
       by: ["tmdbId", "tmdbType"],
       where: { groupCode: code, vote: "LIKE" },
       _count: { _all: true },
-      // För att undvika typbråk – sortera på _count.tmdbId i stället för _all
+      // sortera på count (använder tmdbId-nyckel för att undvika typbråk i Prisma)
       orderBy: { _count: { tmdbId: "desc" } },
       take: 20,
     });
 
+    // Kandidaten vi vill visa för denna användare (ej kvitterad)
     let chosen: { tmdbId: number; tmdbType: TmdbType; count: number } | null = null;
+    // Första kandidat som passerar tröskeln men redan är kvitterad av användaren
+    let firstSeenAboveThreshold: { tmdbId: number; tmdbType: TmdbType; count: number } | null =
+      null;
 
     for (const row of top) {
       const likeCount = row._count?._all ?? 0;
@@ -132,7 +142,16 @@ export async function GET(req: NextRequest) {
           },
           select: { tmdbId: true },
         });
-        if (already) continue;
+        if (already) {
+          if (!firstSeenAboveThreshold) {
+            firstSeenAboveThreshold = {
+              tmdbId: row.tmdbId,
+              tmdbType: row.tmdbType as TmdbType,
+              count: likeCount,
+            };
+          }
+          continue;
+        }
       }
 
       chosen = {
@@ -144,10 +163,10 @@ export async function GET(req: NextRequest) {
     }
 
     if (!chosen) {
-      return NextResponse.json(
-        { ok: true, size, need, count: 0, match: null, matches: [] },
-        { status: 200 }
-      );
+      // Ingen okvitterad kandidat – om första över tröskeln var "already seen" för användaren,
+      // returnera count = dess verkliga likeCount (hjälper felsökning), men match:null.
+      const count = firstSeenAboveThreshold?.count ?? 0;
+      return NextResponse.json({ ok: true, size, need, count, match: null, matches: [] }, { status: 200 });
     }
 
     const details = await tmdbDetails(chosen.tmdbType, chosen.tmdbId, locale);
