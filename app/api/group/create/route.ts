@@ -1,61 +1,87 @@
-// app/api/groups/create/route.ts
+// app/api/group/create/route.ts
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import prisma from "@/lib/prisma";
 import crypto from "node:crypto";
 
-type Body = {
-  name?: string;
+type CreateOk = {
+  ok: true;
+  group: {
+    code: string;
+    createdAt: string; // <- serialiserad ISO-sträng
+    createdBy: string;
+  };
 };
 
-function genCode(): string {
-  // 6 tecken A-Z0-9
+type CreateErr = {
+  ok: false;
+  message?: string;
+};
+
+function genCode(length: number = 6): string {
+  // A–Z + 2–9, utan lättförväxlade tecken
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const bytes = crypto.randomBytes(length);
   let s = "";
-  for (let i = 0; i < 6; i += 1) {
-    const idx = crypto.randomInt(0, alphabet.length);
-    s += alphabet[idx];
+  for (let i = 0; i < length; i += 1) {
+    const idx = bytes[i] % alphabet.length;
+    s += alphabet[idx] ?? "A";
   }
   return s;
 }
 
-export async function POST(req: NextRequest) {
-  const jar = await cookies();
-  const uid = jar.get("nw_uid")?.value ?? null;
-  if (!uid) return NextResponse.json({ ok: false, message: "Ingen session." }, { status: 401 });
+export async function POST(): Promise<NextResponse<CreateOk | CreateErr>> {
+  try {
+    const jar = await cookies();
+    const uid = jar.get("nw_uid")?.value ?? null;
+    if (!uid) {
+      return NextResponse.json({ ok: false, message: "Ingen session." }, { status: 401 });
+    }
 
-  // name tas emot men lagras ej (schema saknar fält) — behåll för framtida bruk
-  const _body = (await req.json()) as Body;
-  let code = genCode();
+    // Generera (praktiskt taget) unik kod med skydd mot extremt osannolik kollision
+    let code = genCode();
+    for (let i = 0; i < 5; i += 1) {
+      const exists = await prisma.group.findUnique({ where: { code } });
+      if (!exists) break;
+      code = genCode();
+    }
 
-  // säkerställ unik kod
-  for (let i = 0; i < 5; i += 1) {
-    const exists = await prisma.group.findUnique({ where: { code } });
-    if (!exists) break;
-    code = genCode();
+    const created = await prisma.group.create({
+      data: { code, createdBy: uid },
+      select: { code: true, createdAt: true, createdBy: true },
+    });
+
+    // Skaparen blir medlem
+    await prisma.groupMember.upsert({
+      where: { groupCode_userId: { groupCode: created.code, userId: uid } },
+      update: {},
+      create: { groupCode: created.code, userId: uid },
+    });
+
+    // Serialisera createdAt -> string för att matcha dina typer/DTO
+    const group = {
+      code: created.code,
+      createdAt: created.createdAt.toISOString(),
+      createdBy: created.createdBy,
+    };
+
+    // Klientläsbar cookie så UI direkt ser aktiv grupp
+    const res = NextResponse.json<CreateOk>({ ok: true, group });
+    res.cookies.set({
+      name: "nw_group",
+      value: group.code,
+      httpOnly: false,
+      sameSite: "lax",
+      secure: true,
+      path: "/",
+      maxAge: 60 * 60 * 24 * 14, // 14 dagar
+    });
+    return res;
+  } catch (e) {
+    const message = e instanceof Error ? e.message : "Internt fel.";
+    return NextResponse.json({ ok: false, message }, { status: 500 });
   }
-
-  const group = await prisma.group.create({
-    data: {
-      code,
-      createdBy: uid,
-      members: {
-        create: { userId: uid },
-      },
-    },
-    select: { code: true, createdAt: true, createdBy: true },
-  });
-
-  const res = NextResponse.json({ ok: true, group });
-  res.cookies.set({
-    name: "nw_group",
-    value: group.code,
-    httpOnly: true,
-    sameSite: "lax",
-    path: "/",
-  });
-  return res;
 }
