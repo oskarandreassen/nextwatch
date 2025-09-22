@@ -1,120 +1,101 @@
-import { NextRequest, NextResponse } from "next/server";
-import { cookies } from "next/headers";
-import { prisma } from "@/lib/prisma";
-
+// app/api/group/invite/respond/route.ts
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-type Ok = { ok: true; joined?: string; declined?: boolean };
+import { NextRequest, NextResponse } from "next/server";
+import { cookies } from "next/headers";
+import prisma from "@/lib/prisma";
+
+type Action = "accept" | "decline";
+type Body = { id: string; action: Action };
+
+type OkJoined = { ok: true; joined: string };
+type OkPlain = { ok: true };
 type Err = { ok: false; message: string };
-type Body = { id: string; action: "accept" | "decline" };
 
-async function cleanup(): Promise<void> {
-  await prisma.groupInvite.deleteMany({
-    where: { status: "pending", expiresAt: { lt: new Date() } },
-  });
+function bad(message: string, status = 200) {
+  return NextResponse.json({ ok: false, message } as Err, { status });
 }
 
-function withGroupCookie(payload: Ok, groupCode: string): NextResponse<Ok> {
-  const res = NextResponse.json(payload);
-  // Sätt aktiv grupp i cookie så serverkomponenter ser den direkt
-  // (secure + lax; välj maxAge som passar din app – här 30 dagar)
-  res.cookies.set("nw_group", groupCode, {
-    path: "/",
-    sameSite: "lax",
-    secure: true,
-    maxAge: 60 * 60 * 24 * 30,
-  });
-  return res;
-}
-
-export async function POST(req: NextRequest): Promise<NextResponse<Ok | Err>> {
-  const jar = await cookies();
-  const uid = jar.get("nw_uid")?.value ?? "";
-
+export async function POST(req: NextRequest) {
+  const jar = await cookies(); // projektregel: alltid await cookies() i App Router (server)
   try {
-    const body = (await req.json()) as unknown;
-
-    if (
-      typeof body !== "object" ||
-      body === null ||
-      typeof (body as Body).id !== "string" ||
-      !["accept", "decline"].includes((body as Body).action as string)
-    ) {
-      return NextResponse.json({ ok: false, message: "Bad request." }, { status: 400 });
+    let body: Body | null = null;
+    try {
+      body = (await req.json()) as Body;
+    } catch {
+      return bad("Invalid JSON.", 400);
     }
 
-    const { id, action } = body as Body;
+    const userId = jar.get("nw_uid")?.value ?? null;
+    if (!userId) return bad("No session.", 401);
 
-    if (!uid) {
-      return NextResponse.json({ ok: false, message: "Not authenticated." }, { status: 401 });
+    if (!body?.id || (body.action !== "accept" && body.action !== "decline")) {
+      return bad("Missing or invalid 'id'/'action'.", 400);
     }
 
-    await cleanup();
+    // Hämta invite → den måste vara riktad till nuvarande användare och pending.
+    const invite = await prisma.groupInvite.findFirst({
+      where: { id: body.id, toUserId: userId, status: "pending" },
+      select: {
+        id: true,
+        groupCode: true,
+        status: true,
+      },
+    });
 
-    const invite = await prisma.groupInvite.findUnique({ where: { id } });
-    if (!invite) return NextResponse.json({ ok: false, message: "Invite not found." }, { status: 404 });
-    if (invite.toUserId !== uid) {
-      return NextResponse.json({ ok: false, message: "Invite does not belong to you." }, { status: 403 });
+    if (!invite) {
+      return bad("Invite not found or already handled.");
     }
 
-    // Redan hanterad?
-    if (invite.status !== "pending") {
-      if (action === "accept") {
-        await prisma.groupMember.upsert({
-          where: { groupCode_userId: { groupCode: invite.groupCode, userId: uid } },
-          create: { groupCode: invite.groupCode, userId: uid },
-          update: {},
-        });
-        return withGroupCookie({ ok: true, joined: invite.groupCode }, invite.groupCode);
-      }
-      return NextResponse.json({ ok: true, declined: true });
-    }
-
-    // TTL?
-    if (invite.expiresAt && invite.expiresAt < new Date()) {
-      await prisma.groupInvite.delete({ where: { id: invite.id } });
-      return NextResponse.json({ ok: false, message: "Invite expired." }, { status: 410 });
-    }
-
-    // Grupp måste finnas
-    const group = await prisma.group.findUnique({ where: { code: invite.groupCode } });
+    // Validera att gruppen finns (edge case: grupp raderad)
+    const group = await prisma.group.findUnique({
+      where: { code: invite.groupCode },
+      select: { code: true },
+    });
     if (!group) {
-      await prisma.groupInvite.delete({ where: { id: invite.id } });
-      return NextResponse.json({ ok: false, message: "Group gone." }, { status: 410 });
+      // Markera som obsolet/declined och svara
+      await prisma.groupInvite.update({
+        where: { id: invite.id },
+        data: { status: "declined", respondedAt: new Date() },
+      });
+      return bad("Group no longer exists.");
     }
 
-    if (action === "decline") {
-      try {
-        await prisma.groupInvite.update({
-          where: { id: invite.id },
-          data: { status: "declined", respondedAt: new Date() },
-        });
-      } catch {
-        /* ignore P2002 etc. */
-      }
-      return NextResponse.json({ ok: true, declined: true });
+    if (body.action === "decline") {
+      await prisma.groupInvite.update({
+        where: { id: invite.id },
+        data: { status: "declined", respondedAt: new Date() },
+      });
+      return NextResponse.json({ ok: true } as OkPlain, { status: 200 });
     }
 
     // ACCEPT
+    // 1) Gör användaren till medlem (idempotent via upsert på (group_code, user_id))
     await prisma.groupMember.upsert({
-      where: { groupCode_userId: { groupCode: invite.groupCode, userId: uid } },
-      create: { groupCode: invite.groupCode, userId: uid },
+      where: { groupCode_userId: { groupCode: group.code, userId } },
       update: {},
+      create: { groupCode: group.code, userId },
     });
 
-    try {
-      await prisma.groupInvite.update({
-        where: { id: invite.id },
-        data: { status: "accepted", respondedAt: new Date() },
-      });
-    } catch (e) {
-      // Om unik-krock (t.ex. gammal accepted): ignorera – medlemskap redan klart.
-    }
+    // 2) Uppdatera invite-status
+    await prisma.groupInvite.update({
+      where: { id: invite.id },
+      data: { status: "accepted", respondedAt: new Date() },
+    });
 
-    return withGroupCookie({ ok: true, joined: invite.groupCode }, invite.groupCode);
-  } catch (e) {
-    console.error("invite respond failed", e);
-    return NextResponse.json({ ok: false, message: "Internal error." }, { status: 500 });
+    // 3) Sätt aktiv grupp-cookie så klienten börjar polla direkt
+    jar.set("nw_group", group.code, {
+      path: "/",
+      maxAge: 60 * 60 * 24 * 14, // 14 dagar
+      sameSite: "lax",
+      secure: true,
+      httpOnly: false, // ska kunna läsas av klient-hooken (useGroupMatchPolling)
+    });
+
+    return NextResponse.json({ ok: true, joined: group.code } as OkJoined, { status: 200 });
+  } catch (e: unknown) {
+    console.error("invite/respond POST error:", e);
+    return bad("Internal error.");
   }
 }
